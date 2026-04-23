@@ -1,0 +1,13 @@
+name: "Orange Business Services"
+aliases:
+  - Orange Business Services
+  - OrangeBusinessServices
+  - orange business services
+  - Orange Business
+  - OBS
+  - Orange
+
+# No filename_patterns — classifier falls back to content-based alias match.
+# No account_number_patterns — extractor uses format-agnostic regex.
+# No prompts directory — extraction uses the generic invoice prompt at
+# configs/processing/invoice_extraction.md (auto-detects carrier from document).

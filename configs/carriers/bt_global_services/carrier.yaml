@@ -1,0 +1,13 @@
+name: "BT Global Services"
+aliases:
+  - BT Global Services
+  - BTGlobalServices
+  - bt global services
+  - BT
+  - British Telecom
+  - BT Global
+
+# No filename_patterns — classifier falls back to content-based alias match.
+# No account_number_patterns — extractor uses format-agnostic regex.
+# No prompts directory — extraction uses the generic invoice prompt at
+# configs/processing/invoice_extraction.md (auto-detects carrier from document).
