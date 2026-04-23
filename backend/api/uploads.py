@@ -126,6 +126,14 @@ def _list_uploads(include_deleted: bool = False, only_deleted: bool = False) -> 
             continue
         results_raw = r.get(f"{_upload_key(uid)}:results")
         result_count = len(json.loads(results_raw)) if results_raw else 0
+        # Carriers from classify stage (may contain "Unknown" while extraction pending).
+        # Prefer computed_carriers (from actual row data) when available — those
+        # reflect the LLM-detected carrier names and avoid "Unknown" labels.
+        classified_carriers = sorted({
+            c.get("carrier") for c in data.get("classified", [])
+            if c.get("carrier") and c.get("carrier").lower() != "unknown"
+        })
+        computed_carriers = data.get("computed_carriers") or []
         uploads.append({
             "upload_id": uid,
             "project_name": data.get("project_name", ""),
@@ -137,6 +145,12 @@ def _list_uploads(include_deleted: bool = False, only_deleted: bool = False) -> 
             "created_at": data.get("created_at", ""),
             "deleted_at": data.get("deleted_at"),
             "classified": data.get("classified", []),
+            # Richer card stats — zero when not yet computed (pending extraction).
+            "rows_with_issues": data.get("rows_with_issues", 0),
+            "rows_error_level": data.get("rows_error_level", 0),
+            "unique_accounts": data.get("unique_accounts", 0),
+            # Effective carrier list: post-extraction names when available; else classify stage.
+            "carriers": computed_carriers or classified_carriers,
         })
         seen_ids.add(uid)
 
@@ -1010,11 +1024,21 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
                 logger.error(f"Extraction failed for {filename}: {e}")
                 continue
 
-        # Validation summary — total rows with any validator issue vs. clean rows
+        # Summary stats — validation issues, unique accounts, carrier names
+        # computed from extracted rows. Surfaced on the Previous Uploads cards.
         rows_with_issues = sum(1 for r in all_rows if r.get("validation_issues"))
         rows_error_level = sum(1 for r in all_rows
                                if any(i.get("severity") == "error" for i in (r.get("validation_issues") or [])))
+        unique_accounts = len({r.get("carrier_account_number") for r in all_rows if r.get("carrier_account_number")})
+        # Prefer detected carrier_name from row data — falls back to routing key.
+        carrier_names = {
+            (r.get("carrier_name") or r.get("carrier") or "").strip()
+            for r in all_rows
+            if (r.get("carrier_name") or r.get("carrier"))
+        }
+        computed_carriers = sorted(c for c in carrier_names if c and c.lower() not in ("unknown", ""))
         logger.info(f"Validation: {rows_with_issues} of {len(all_rows)} rows have issues ({rows_error_level} at error severity)")
+        logger.info(f"Computed: {unique_accounts} unique accounts, carriers={computed_carriers}")
 
         _update_upload_field(
             upload_id,
@@ -1022,6 +1046,8 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
             files_processed=files_processed,
             rows_with_issues=rows_with_issues,
             rows_error_level=rows_error_level,
+            unique_accounts=unique_accounts,
+            computed_carriers=computed_carriers,
         )
         _update_upload_results(upload_id, all_rows)
         logger.info(f"Upload {upload_id} complete: {len(all_rows)} total rows from {files_processed} files")

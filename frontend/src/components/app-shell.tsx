@@ -30,8 +30,8 @@ export type Page = "dashboard" | "upload" | "results" | "review" | "analytics" |
 const navItems: { id: Page; label: string; icon: React.ElementType }[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "upload", label: "Upload", icon: Upload },
+  // Results doubles as the review/inspection surface — users click a row to review it in context.
   { id: "results", label: "Results", icon: Table2 },
-  { id: "review", label: "Review", icon: FileSearch },
   { id: "analytics", label: "Analytics", icon: BarChart3 },
   { id: "bin", label: "Bin", icon: Trash2 },
   { id: "settings", label: "Settings", icon: Settings },

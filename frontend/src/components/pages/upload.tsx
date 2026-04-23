@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import {
-  FileText, CheckCircle2, Loader2, X, FolderOpen, Play, Eye, AlertTriangle, Upload as UploadIcon, Trash2, RotateCcw, ArrowLeft, Download, RefreshCw,
+  FileText, CheckCircle2, Loader2, X, FolderOpen, Play, Eye, AlertTriangle, Upload as UploadIcon, Trash2, RotateCcw, ArrowLeft, Download, RefreshCw, LayoutGrid, List as ListIcon,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -51,6 +51,7 @@ export function UploadPage({ onViewResults }: UploadPageProps) {
   const setClientName = (v: string) => store.setDraftField("draftClientName", v);
   const setDescription = (v: string) => store.setDraftField("draftDescription", v);
   const [configuredCarriers, setConfiguredCarriers] = useState<string[]>([]);
+  const [previousView, setPreviousView] = useState<"list" | "grid">("list");
   const [selectedCarriers, setSelectedCarriers] = useState<Set<string>>(new Set());
   const [isDragging, setIsDragging] = useState(false);
   const [classifying, setClassifying] = useState(false);
@@ -343,11 +344,11 @@ export function UploadPage({ onViewResults }: UploadPageProps) {
   // No active upload — show drop zone + uploads list
   if (!upload || upload.status === "done") {
     return (
-      <div className="p-8 space-y-6 max-w-5xl mx-auto">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Upload & Extract</h1>
-          <p className="text-muted-foreground text-sm mt-1">Drop a folder or select files</p>
-        </div>
+      <div className="px-6 py-6 space-y-5 max-w-6xl mx-auto">
+        <header>
+          <h1 className="text-2xl font-semibold tracking-tight">Upload & Extract</h1>
+          <p className="text-muted-foreground text-sm mt-1">Drop files or a folder to start a new extraction</p>
+        </header>
 
         {/* Show completed upload summary if exists */}
         {upload?.status === "done" && (
@@ -372,94 +373,216 @@ export function UploadPage({ onViewResults }: UploadPageProps) {
           </Card>
         )}
 
-        <div className="grid grid-cols-2 gap-4 max-w-2xl">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
-            <label className="text-sm text-muted-foreground mb-2 block">Project Name *</label>
-            <Input placeholder="e.g., City of Dublin - Aug 2025" value={projectName} onChange={(e) => setProjectName(e.target.value)} className="bg-card/50" />
+            <label htmlFor="project-name" className="text-xs font-medium text-muted-foreground mb-1.5 block uppercase tracking-wider">Project name *</label>
+            <Input
+              id="project-name"
+              placeholder="City of Dublin – Aug 2025"
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+              className="bg-card/50 h-9"
+              aria-required="true"
+            />
           </div>
           <div>
-            <label className="text-sm text-muted-foreground mb-2 block">Client Name</label>
-            <Input placeholder="e.g., City of Dublin" value={clientName} onChange={(e) => setClientName(e.target.value)} className="bg-card/50" />
+            <label htmlFor="client-name" className="text-xs font-medium text-muted-foreground mb-1.5 block uppercase tracking-wider">Client</label>
+            <Input
+              id="client-name"
+              placeholder="City of Dublin"
+              value={clientName}
+              onChange={(e) => setClientName(e.target.value)}
+              className="bg-card/50 h-9"
+            />
           </div>
-          <div className="col-span-2">
-            <label className="text-sm text-muted-foreground mb-2 block">Description</label>
-            <Input placeholder="Monthly invoice batch, AT&T + Spectrum accounts" value={description} onChange={(e) => setDescription(e.target.value)} className="bg-card/50" />
+          <div>
+            <label htmlFor="description" className="text-xs font-medium text-muted-foreground mb-1.5 block uppercase tracking-wider">Description</label>
+            <Input
+              id="description"
+              placeholder="Monthly invoice batch"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="bg-card/50 h-9"
+            />
           </div>
         </div>
 
         {classifying ? (
-          <div className="rounded-2xl border-2 border-dashed border-emerald-500/30 bg-emerald-500/5 p-16 text-center">
-            <Loader2 className="w-10 h-10 mx-auto mb-4 text-emerald-400 animate-spin" />
-            <p className="text-lg font-medium">Classifying files...</p>
-            <p className="text-sm text-muted-foreground mt-1">Backend is analyzing document types and carriers</p>
+          <div className="neu rounded-2xl p-10 text-center">
+            <Loader2 className="w-8 h-8 mx-auto mb-3 text-emerald-400 animate-spin" />
+            <p className="font-medium">Classifying files…</p>
+            <p className="text-sm text-muted-foreground mt-1">Detecting carriers and document types</p>
           </div>
         ) : (
-          <div className="flex gap-4">
-            <motion.div
-              onDragOver={(e) => { if (canUpload) { e.preventDefault(); setIsDragging(true); } }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={(e) => { if (canUpload) handleDrop(e); else { e.preventDefault(); toast.error("Please enter a Project Name first"); } }}
-              animate={isDragging ? { scale: 1.01 } : { scale: 1 }}
-              className={`flex-1 rounded-2xl border-2 border-dashed p-12 text-center transition-colors ${!canUpload ? "opacity-40 cursor-not-allowed" : "cursor-pointer"} ${isDragging ? "border-emerald-500 bg-emerald-500/5" : "border-border/50 hover:border-border bg-card/30"}`}
-              onClick={() => {
-                if (!canUpload) { toast.error("Please enter a Project Name first"); return; }
+          <motion.div
+            role="button"
+            tabIndex={canUpload ? 0 : -1}
+            aria-label="Drop files or folder here, or click to select"
+            onDragOver={(e) => { if (canUpload) { e.preventDefault(); setIsDragging(true); } }}
+            onDragLeave={() => setIsDragging(false)}
+            onDrop={(e) => { if (canUpload) handleDrop(e); else { e.preventDefault(); toast.error("Please enter a Project Name first"); } }}
+            onKeyDown={(e) => {
+              if (!canUpload) return;
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
                 const input = document.createElement("input");
                 input.type = "file"; input.multiple = true;
-                input.setAttribute("webkitdirectory", ""); input.setAttribute("directory", "");
-                input.onchange = (e) => { const t = e.target as HTMLInputElement; if (t.files) handleFiles(t.files); };
-                input.click();
-              }}
-            >
-              <FolderOpen className={`w-8 h-8 mx-auto mb-3 ${isDragging ? "text-emerald-400" : "text-muted-foreground/50"}`} />
-              <p className="font-medium">{isDragging ? "Drop here" : "Drop or select folder"}</p>
-              <p className="text-xs text-muted-foreground mt-1">{canUpload ? "PDF, XLSX, CSV, DOCX, MSG, EML" : "Enter Project Name above to enable upload"}</p>
-            </motion.div>
-            <div
-              className={`w-48 rounded-2xl border-2 border-dashed border-border/50 bg-card/30 p-12 text-center transition-colors ${!canUpload ? "opacity-40 cursor-not-allowed" : "cursor-pointer hover:border-border"}`}
-              onClick={() => {
-                if (!canUpload) { toast.error("Please enter a Project Name first"); return; }
-                const input = document.createElement("input");
-                input.type = "file";
-                input.multiple = true;
                 input.accept = ".pdf,.xlsx,.xls,.csv,.docx,.msg,.eml";
-                input.onchange = (e) => { const t = e.target as HTMLInputElement; if (t.files) handleFiles(t.files); };
+                input.onchange = (ev) => { const t = ev.target as HTMLInputElement; if (t.files) handleFiles(t.files); };
                 input.click();
-              }}
-            >
-              <UploadIcon className="w-8 h-8 mx-auto mb-3 text-muted-foreground/50" />
-              <p className="font-medium">Select files</p>
-              <p className="text-xs text-muted-foreground mt-1">Individual files</p>
+              }
+            }}
+            animate={isDragging ? { scale: 1.005 } : { scale: 1 }}
+            className={`
+              rounded-2xl border-2 border-dashed p-10 text-center transition-colors
+              focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60
+              ${!canUpload ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}
+              ${isDragging ? "border-emerald-500 bg-emerald-500/5" : "border-border/60 hover:border-border bg-card/30"}
+            `}
+            onClick={() => {
+              if (!canUpload) { toast.error("Please enter a Project Name first"); return; }
+              // Single entry: default to file picker (covers most flows).
+              // Folder picker is available via the explicit button below, so both
+              // modes are reachable with one unified affordance.
+              const input = document.createElement("input");
+              input.type = "file"; input.multiple = true;
+              input.accept = ".pdf,.xlsx,.xls,.csv,.docx,.msg,.eml";
+              input.onchange = (e) => { const t = e.target as HTMLInputElement; if (t.files) handleFiles(t.files); };
+              input.click();
+            }}
+          >
+            <div className="flex items-center justify-center gap-3 mb-2">
+              <UploadIcon className={`w-7 h-7 ${isDragging ? "text-emerald-400" : "text-muted-foreground/60"}`} />
+              <FolderOpen className={`w-7 h-7 ${isDragging ? "text-emerald-400" : "text-muted-foreground/60"}`} />
             </div>
-          </div>
+            <p className="font-medium">
+              {isDragging ? "Drop here" : "Drop files or folder to upload"}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {canUpload ? "PDF · XLSX · CSV · DOCX · MSG · EML" : "Enter a Project Name above to enable upload"}
+            </p>
+            {canUpload && (
+              <div className="mt-4 flex items-center justify-center gap-2 text-xs text-muted-foreground">
+                <span>or pick:</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const input = document.createElement("input");
+                    input.type = "file"; input.multiple = true;
+                    input.accept = ".pdf,.xlsx,.xls,.csv,.docx,.msg,.eml";
+                    input.onchange = (ev) => { const t = ev.target as HTMLInputElement; if (t.files) handleFiles(t.files); };
+                    input.click();
+                  }}
+                  className="underline hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60 rounded-sm"
+                >
+                  individual files
+                </button>
+                <span>·</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const input = document.createElement("input");
+                    input.type = "file"; input.multiple = true;
+                    input.setAttribute("webkitdirectory", ""); input.setAttribute("directory", "");
+                    input.onchange = (ev) => { const t = ev.target as HTMLInputElement; if (t.files) handleFiles(t.files); };
+                    input.click();
+                  }}
+                  className="underline hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60 rounded-sm"
+                >
+                  a folder
+                </button>
+              </div>
+            )}
+          </motion.div>
         )}
 
         {/* Existing uploads list */}
         {allUploads.length > 0 && (
-          <div className="space-y-3">
+          <section aria-labelledby="previous-uploads-heading" className="space-y-3">
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Previous Uploads</h2>
-              <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={handleCleanup}>
-                Clean up temp files
-              </Button>
+              <h2 id="previous-uploads-heading" className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+                Previous uploads
+                <span className="ml-2 text-xs normal-case font-normal tracking-normal text-muted-foreground/70">
+                  {allUploads.filter((u) => u.id !== upload?.id).length}
+                </span>
+              </h2>
+              <div className="flex items-center gap-2">
+                <div role="group" aria-label="Layout" className="flex items-center rounded-lg border border-border/60 overflow-hidden">
+                  <button
+                    type="button"
+                    aria-pressed={previousView === "list"}
+                    aria-label="List view"
+                    onClick={() => setPreviousView("list")}
+                    className={`px-2 py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60 ${previousView === "list" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  >
+                    <ListIcon className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={previousView === "grid"}
+                    aria-label="Grid view"
+                    onClick={() => setPreviousView("grid")}
+                    className={`px-2 py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60 ${previousView === "grid" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={handleCleanup}>
+                  Clean up temp
+                </Button>
+              </div>
             </div>
+            <div className={previousView === "grid" ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" : "space-y-3"}>
             {allUploads
               .filter((u) => u.id !== upload?.id)
               .map((u) => {
                 const sl = statusLabel(u.status);
+                const isGrid = previousView === "grid";
+                const warnings = u.rowsWithIssues ?? 0;
+                const accounts = u.uniqueAccounts ?? 0;
+                // Carriers: LLM-detected post-extraction; fallback to classify-stage
+                // carrier labels, excluding "Unknown" which gets replaced once rows exist.
+                const carrierList = (u.carriers || []).filter((c) => c && c.toLowerCase() !== "unknown");
                 return (
-                  <Card key={u.id} className="neu rounded-xl px-5 py-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3 min-w-0 flex-1">
-                        <div>
-                          <p className="font-medium text-sm truncate">
-                            {u.projectName || `Upload ${u.id}`}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {u.files.length} files · {u.totalRows} rows · <span className={sl.color}>{sl.text}</span>
-                          </p>
+                  <Card key={u.id} className={`neu rounded-xl ${isGrid ? "p-4" : "px-5 py-3"}`}>
+                    <div className={isGrid ? "flex flex-col gap-3" : "flex items-center justify-between gap-3"}>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium text-sm truncate" title={u.projectName}>
+                          {u.projectName || `Upload ${u.id}`}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {u.files.length} file{u.files.length === 1 ? "" : "s"} · {u.totalRows.toLocaleString()} row{u.totalRows === 1 ? "" : "s"}
+                          {accounts > 0 && <> · {accounts} account{accounts === 1 ? "" : "s"}</>}
+                          {warnings > 0 && (
+                            <>
+                              {" · "}
+                              <span className="text-amber-400">{warnings} warning{warnings === 1 ? "" : "s"}</span>
+                            </>
+                          )}
+                        </p>
+                        <div className="flex items-center flex-wrap gap-1.5 mt-2">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${sl.color} bg-muted/60`}>
+                            {sl.text}
+                          </span>
+                          {carrierList.length > 0 ? (
+                            carrierList.slice(0, 4).map((c) => (
+                              <span key={c} className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-300 border border-sky-500/20">
+                                {c}
+                              </span>
+                            ))
+                          ) : u.status === "done" ? null : (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted/40 text-muted-foreground">
+                              detecting…
+                            </span>
+                          )}
+                          {carrierList.length > 4 && (
+                            <span className="text-[10px] text-muted-foreground">+{carrierList.length - 4}</span>
+                          )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
+                      <div className={`flex items-center ${isGrid ? "justify-end flex-wrap" : "shrink-0"} gap-1.5`}>
                         {u.status === "done" && (
                           <>
                             <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { store.setActiveUpload(u.id); onViewResults?.(); }}>
@@ -508,7 +631,8 @@ export function UploadPage({ onViewResults }: UploadPageProps) {
                   </Card>
                 );
               })}
-          </div>
+            </div>
+          </section>
         )}
       </div>
     );

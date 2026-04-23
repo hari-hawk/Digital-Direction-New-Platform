@@ -74,6 +74,27 @@ export function BinPage() {
     }
   };
 
+  const onEmptyBin = async () => {
+    if (items.length === 0) return;
+    const ok = window.confirm(
+      `Permanently delete all ${items.length} project${items.length === 1 ? "" : "s"} in the bin? This cannot be undone.`,
+    );
+    if (!ok) return;
+    setBusyId("__all__");
+    setError(null);
+    try {
+      // Purge sequentially to avoid hammering the backend; slight UX wait acceptable for a destructive action.
+      for (const u of items) {
+        await apiPurgeUpload(u.upload_id);
+      }
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const onDownload = async (id: string, name: string) => {
     setBusyId(id);
     try {
@@ -105,9 +126,22 @@ export function BinPage() {
               Purging a project removes everything permanently.
             </p>
           </div>
-          <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
+              Refresh
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onEmptyBin}
+              disabled={loading || items.length === 0 || busyId !== null}
+              className="text-rose-400 border-rose-500/30 hover:bg-rose-500/10 hover:text-rose-300"
+              title="Permanently delete every project in the bin"
+            >
+              <Trash2 className="w-4 h-4 mr-1.5" />
+              Empty bin {items.length > 0 && `(${items.length})`}
+            </Button>
+          </div>
         </header>
 
         <Separator className="opacity-50" />

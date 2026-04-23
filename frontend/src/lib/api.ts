@@ -75,6 +75,11 @@ export interface UploadSummary {
   created_at: string;
   deleted_at?: string | null;
   classified: ClassifiedFileResponse[];
+  // Computed stats (present after extraction completes)
+  rows_with_issues?: number;
+  rows_error_level?: number;
+  unique_accounts?: number;
+  carriers?: string[]; // LLM-detected carrier names; non-"Unknown" when known
 }
 
 export async function apiListUploads(): Promise<{ uploads: UploadSummary[] }> {

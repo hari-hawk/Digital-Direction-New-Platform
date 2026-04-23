@@ -66,9 +66,9 @@ export function AnalyticsPage() {
 
   if (loading) {
     return (
-      <div className="p-8 space-y-8 max-w-6xl mx-auto">
+      <div className="px-6 py-6 space-y-5 max-w-6xl mx-auto">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Analytics</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
           <p className="text-muted-foreground text-sm mt-1">Extraction quality metrics and trends</p>
         </div>
         <div className="flex items-center gap-2 text-muted-foreground py-12 justify-center">
@@ -81,9 +81,9 @@ export function AnalyticsPage() {
 
   if (error || !stats || stats.total_rows === 0) {
     return (
-      <div className="p-8 space-y-8 max-w-6xl mx-auto">
+      <div className="px-6 py-6 space-y-5 max-w-6xl mx-auto">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Analytics</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
           <p className="text-muted-foreground text-sm mt-1">Extraction quality metrics and trends</p>
         </div>
         <Card className="p-12 bg-card/50 border-border/50 text-center">
@@ -116,9 +116,9 @@ export function AnalyticsPage() {
       : 0;
 
   return (
-    <div className="p-8 space-y-6 max-w-6xl mx-auto">
+    <div className="px-6 py-6 space-y-5 max-w-6xl mx-auto">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Analytics</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
         <p className="text-muted-foreground text-sm mt-1">
           Extraction quality metrics across {stats.total_rows.toLocaleString()} rows
         </p>

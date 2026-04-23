@@ -94,6 +94,9 @@ export interface Upload {
   totalRows: number;
   totalCost: number;
   carriers: string[];
+  // Summary stats surfaced on Previous Uploads cards (set by backend post-extraction)
+  rowsWithIssues?: number;
+  uniqueAccounts?: number;
 }
 
 interface ClassifiedFileFromAPI {
@@ -307,7 +310,12 @@ export const useAppStore = create<AppStore>()(
           docType: cf.doc_type,
           status: "classified" as const,
         }));
-        const carriers = [...new Set(files.map((f) => f.carrier).filter(Boolean))] as string[];
+        // Use LLM-computed carriers from the backend (cleans out "Unknown")
+        // when available; otherwise fall back to the classify-stage values.
+        const fallbackCarriers = [...new Set(files.map((f) => f.carrier).filter(Boolean))] as string[];
+        const carriers = (s.carriers && s.carriers.length > 0)
+          ? s.carriers
+          : fallbackCarriers.filter((c) => c && c.toLowerCase() !== "unknown");
 
         const upload: Upload = {
           id: s.upload_id,
@@ -321,6 +329,8 @@ export const useAppStore = create<AppStore>()(
           totalRows: s.total_rows,
           totalCost: 0,
           carriers,
+          rowsWithIssues: s.rows_with_issues,
+          uniqueAccounts: s.unique_accounts,
         };
 
         // If done, load results

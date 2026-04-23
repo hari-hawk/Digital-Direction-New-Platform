@@ -56,11 +56,11 @@ export function DashboardPage({ onViewUpload }: DashboardPageProps) {
 
   if (loading) {
     return (
-      <div className="p-8 space-y-8 max-w-7xl mx-auto">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+      <div className="px-6 py-6 space-y-5 max-w-7xl mx-auto">
+        <header>
+          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
           <p className="text-muted-foreground text-sm mt-1">Extraction pipeline overview</p>
-        </div>
+        </header>
         <div className="flex items-center gap-2 text-muted-foreground py-12 justify-center">
           <Loader2 className="w-4 h-4 animate-spin" />
           <span className="text-sm">Loading metrics...</span>
@@ -71,11 +71,11 @@ export function DashboardPage({ onViewUpload }: DashboardPageProps) {
 
   if (error || !stats || stats.rows.total === 0) {
     return (
-      <div className="p-8 space-y-8 max-w-7xl mx-auto">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+      <div className="px-6 py-6 space-y-5 max-w-7xl mx-auto">
+        <header>
+          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
           <p className="text-muted-foreground text-sm mt-1">Extraction pipeline overview</p>
-        </div>
+        </header>
         <Card className="p-12 bg-card/50 border-border/50 text-center">
           <LayoutDashboard className="w-10 h-10 mx-auto mb-4 text-muted-foreground/30" />
           <p className="text-lg font-medium text-muted-foreground">
@@ -111,16 +111,16 @@ export function DashboardPage({ onViewUpload }: DashboardPageProps) {
   };
 
   return (
-    <div className="p-8 space-y-6 max-w-7xl mx-auto">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+    <div className="px-6 py-6 space-y-5 max-w-7xl mx-auto">
+      <header>
+        <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
         <p className="text-muted-foreground text-sm mt-1">Extraction pipeline overview</p>
-      </div>
+      </header>
 
       {/* Live Operations strip — real-time Redis/spend/config state, refreshes every 10s */}
       {live && (
         <div className="grid grid-cols-3 gap-4">
-          <Card className="neu rounded-xl p-5">
+          <Card className="neu rounded-xl p-4">
             <div className="flex items-center gap-3 mb-3">
               <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-amber-500/10">
                 {live.active.count > 0 ? (
@@ -151,7 +151,7 @@ export function DashboardPage({ onViewUpload }: DashboardPageProps) {
             )}
           </Card>
 
-          <Card className="neu rounded-xl p-5">
+          <Card className="neu rounded-xl p-4">
             <div className="flex items-center gap-3 mb-3">
               <div
                 className={`flex items-center justify-center w-9 h-9 rounded-lg ${
@@ -198,7 +198,7 @@ export function DashboardPage({ onViewUpload }: DashboardPageProps) {
             </div>
           </Card>
 
-          <Card className="neu rounded-xl p-5">
+          <Card className="neu rounded-xl p-4">
             <div className="flex items-center gap-3 mb-3">
               <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-sky-500/10">
                 <Satellite className="w-4 h-4 text-sky-400" />
@@ -226,7 +226,7 @@ export function DashboardPage({ onViewUpload }: DashboardPageProps) {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-6 gap-4">
-        <Card className="neu rounded-xl p-5">
+        <Card className="neu rounded-xl p-4">
           <div className="flex items-center gap-3 mb-3">
             <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-blue-500/10">
               <Rows3 className="w-4 h-4 text-blue-400" />
@@ -236,7 +236,7 @@ export function DashboardPage({ onViewUpload }: DashboardPageProps) {
           <p className="text-2xl font-bold">{stats.rows.total.toLocaleString()}</p>
         </Card>
 
-        <Card className="neu rounded-xl p-5">
+        <Card className="neu rounded-xl p-4">
           <div className="flex items-center gap-3 mb-3">
             <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-emerald-500/10">
               <DollarSign className="w-4 h-4 text-emerald-400" />
@@ -248,7 +248,7 @@ export function DashboardPage({ onViewUpload }: DashboardPageProps) {
           </p>
         </Card>
 
-        <Card className="neu rounded-xl p-5">
+        <Card className="neu rounded-xl p-4">
           <div className="flex items-center gap-3 mb-3">
             <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-violet-500/10">
               <FileText className="w-4 h-4 text-violet-400" />
@@ -258,7 +258,7 @@ export function DashboardPage({ onViewUpload }: DashboardPageProps) {
           <p className="text-2xl font-bold">{stats.extraction_runs.total_documents}</p>
         </Card>
 
-        <Card className="neu rounded-xl p-5">
+        <Card className="neu rounded-xl p-4">
           <div className="flex items-center gap-3 mb-3">
             <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-amber-500/10">
               <Activity className="w-4 h-4 text-amber-400" />
@@ -268,7 +268,7 @@ export function DashboardPage({ onViewUpload }: DashboardPageProps) {
           <p className="text-2xl font-bold">{stats.extraction_runs.total}</p>
         </Card>
 
-        <Card className="neu rounded-xl p-5">
+        <Card className="neu rounded-xl p-4">
           <div className="flex items-center gap-3 mb-3">
             <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-indigo-500/10">
               <Rows3 className="w-4 h-4 text-indigo-400" />
@@ -280,7 +280,7 @@ export function DashboardPage({ onViewUpload }: DashboardPageProps) {
           </p>
         </Card>
 
-        <Card className="neu rounded-xl p-5">
+        <Card className="neu rounded-xl p-4">
           <div className="flex items-center gap-3 mb-3">
             <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-teal-500/10">
               <DollarSign className="w-4 h-4 text-teal-400" />
@@ -295,7 +295,7 @@ export function DashboardPage({ onViewUpload }: DashboardPageProps) {
 
       <div className="grid grid-cols-3 gap-4">
         {/* Confidence Breakdown */}
-        <Card className="neu rounded-xl p-5">
+        <Card className="neu rounded-xl p-4">
           <h2 className="font-semibold mb-4">Confidence</h2>
           <div className="space-y-3">
             <div className="flex items-center justify-between">
@@ -350,7 +350,7 @@ export function DashboardPage({ onViewUpload }: DashboardPageProps) {
         </Card>
 
         {/* Review Status */}
-        <Card className="neu rounded-xl p-5">
+        <Card className="neu rounded-xl p-4">
           <h2 className="font-semibold mb-4">Review Status</h2>
           <div className="space-y-3">
             <div className="flex items-center justify-between">
@@ -376,7 +376,7 @@ export function DashboardPage({ onViewUpload }: DashboardPageProps) {
         </Card>
 
         {/* Carrier Breakdown */}
-        <Card className="neu rounded-xl p-5">
+        <Card className="neu rounded-xl p-4">
           <h2 className="font-semibold mb-4">By Carrier</h2>
           {stats.carriers.length === 0 ? (
             <p className="text-sm text-muted-foreground py-2">No carrier data</p>
@@ -402,7 +402,7 @@ export function DashboardPage({ onViewUpload }: DashboardPageProps) {
 
       {/* Recent Runs */}
       {stats.recent_runs.length > 0 && (
-        <Card className="neu rounded-xl p-5">
+        <Card className="neu rounded-xl p-4">
           <h2 className="font-semibold mb-4">Recent Extraction Runs</h2>
           <div className="space-y-2">
             {stats.recent_runs.map((run) => (
