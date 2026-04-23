@@ -1,0 +1,59 @@
+name: "Spectrum"
+aliases: ["Spectrum", "spectrum", "Charter", "Charter Communications", "Spectrum Business", "Spectrum Enterprise"]
+
+filename_patterns:
+  invoice:
+    - pattern: "^Spectrum\\s*[-_]"
+      confidence: 0.95
+    - pattern: "Spectrum.*BILL"
+      confidence: 0.90
+    - pattern: "Charter.*Comm"
+      confidence: 0.90
+    - pattern: "^Charter\\s*[-_]"
+      confidence: 0.85
+
+account_number_patterns:
+  - pattern: "\\b(\\d{9})\\b"
+    format_desc: "9-digit account"
+    example: "123456789"
+  - pattern: "\\b(\\d{4}\\s\\d{2}\\s\\d{3}\\s\\d{7})\\b"
+    format_desc: "Segmented 16-digit"
+    example: "1234 56 789 0001234"
+
+first_page_signals:
+  required_any:
+    - "Spectrum"
+    - "Charter"
+    - "Charter Communications"
+  doc_type_markers:
+    invoice:
+      - "Balance Due"
+      - "Recurring Charges"
+      - "Account Number"
+      - "Charge Details"
+    contract:
+      - "Service Agreement"
+      - "Terms and Conditions"
+      - "Contract Term"
+      - "Pricing Schedule"
+      - "Service Order"
+
+# ── Pre-merge normalization ──
+# Spectrum consolidated invoices have hierarchical billing: a control/billing
+# account and per-location sub-accounts. The LLM extraction puts per-location
+# accounts in carrier_account_number and the control account in master_account.
+# Standard field semantics: carrier_account_number = billing account,
+# sub_account_number_1 = per-location. promote_master_account corrects this.
+pre_merge_normalization:
+  promote_master_account: true
+
+merge_rules:
+  account_normalization:
+    char_class: "digits"
+  phone_normalization:
+    pad_short_phones: false
+  doc_type_roles:
+    invoice: primary
+    csr: primary
+    contract: enrichment
+    report: enrichment

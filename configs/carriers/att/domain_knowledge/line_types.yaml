@@ -1,0 +1,5 @@
+# AT&T Line Type Codes
+
+B1W: "Business 1-party Wire"
+B1W-M: "Business 1-party Wire - Main (BTN)"
+RCU: "Residential/Commercial Use (features: AR=Area Restriction, CR=Call Restriction, COT=CO Termination, TWC=Three-Way Calling)"

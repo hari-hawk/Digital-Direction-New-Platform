@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.venv/
+venv/
+
+# Data (large files, client data)
+data/
+storage/
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Evals output
+evals/reports/*.json
+evals/reports/*.xlsx
+
+# Node
+node_modules/
+.next/
+frontend/.next/
+graphify-out/
+
+# Extraction cache (intermediate results, avoid re-running pipeline)
+data/cache/
+
+# Test caches
+.pytest_cache/
+
+# Logs
+*.log
+
+# User-local Claude Code settings (project-level settings.json is shared)
+.claude/settings.local.json
+
+# Spend ledger (runtime state, cumulative cost)
+**/.spend_ledger.json
+
+# Frontend build outputs
+frontend/out/
+frontend/next-env.d.ts
+
+# Backup / lock files
+*.bak
+*.orig

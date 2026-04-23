@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Digital Direction — GCP Architecture</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#0b0e13;font-family:'Inter',sans-serif;display:flex;justify-content:center;padding:30px;}
+</style>
+</head>
+<body>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 900" width="1400" height="900" style="max-width:100%;">
+  <defs>
+    <!-- Arrow markers -->
+    <marker id="ah" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#4285F4" stroke-width="1.2"/>
+    </marker>
+    <marker id="ah-green" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#34A853" stroke-width="1.2"/>
+    </marker>
+    <marker id="ah-yellow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#F9AB00" stroke-width="1.2"/>
+    </marker>
+    <marker id="ah-purple" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#A142F4" stroke-width="1.2"/>
+    </marker>
+    <marker id="ah-cyan" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#00BCD4" stroke-width="1.2"/>
+    </marker>
+    <marker id="ah-violet" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#7C3AED" stroke-width="1.2"/>
+    </marker>
+    <marker id="ah-muted" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#484f58" stroke-width="1.2"/>
+    </marker>
+
+    <!-- Glow filter -->
+    <filter id="glow"><feGaussianBlur stdDeviation="2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1400" height="900" fill="#0b0e13"/>
+
+  <!-- Title -->
+  <text x="700" y="32" text-anchor="middle" fill="#fff" font-size="18" font-weight="700" font-family="Inter,sans-serif">Architecture Design</text>
+  <text x="700" y="50" text-anchor="middle" fill="#484f58" font-size="10" font-family="Inter,sans-serif">Digital Direction — AI-Powered Carrier Operations Optimization Platform</text>
+
+  <!-- ============ GCP BOUNDARY ============ -->
+  <rect x="30" y="65" width="1340" height="770" rx="12" fill="none" stroke="#4285F4" stroke-width="1.5" stroke-dasharray="8,4" opacity="0.3"/>
+  <rect x="40" y="56" width="170" height="16" fill="#0b0e13"/>
+  <text x="48" y="67" fill="#4285F4" font-size="9" font-weight="700" letter-spacing="1" font-family="Inter,sans-serif">GOOGLE CLOUD PLATFORM</text>
+
+  <!-- ============ ANALYTICS LAYER (top center) ============ -->
+  <rect x="210" y="85" width="650" height="130" rx="8" fill="rgba(249,171,0,0.03)" stroke="rgba(249,171,0,0.15)" stroke-width="1" stroke-dasharray="6,3"/>
+  <text x="230" y="104" fill="#F9AB00" font-size="8" font-weight="700" letter-spacing="1.5" font-family="Inter,sans-serif">ANALYTICS LAYER</text>
+
+  <!-- Vertex AI -->
+  <rect x="235" y="118" width="44" height="44" rx="8" fill="#F9AB00"/>
+  <text x="257" y="145" text-anchor="middle" fill="#1a1500" font-size="14" font-weight="700" font-family="Inter">V</text>
+  <text x="257" y="176" text-anchor="middle" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Vertex AI</text>
+
+  <!-- Gemini Flash -->
+  <rect x="345" y="118" width="44" height="44" rx="8" fill="#F9AB00"/>
+  <text x="367" y="146" text-anchor="middle" fill="#1a1500" font-size="11" font-weight="700" font-family="Inter">GF</text>
+  <text x="367" y="176" text-anchor="middle" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Gemini Flash</text>
+  <text x="367" y="188" text-anchor="middle" fill="#484f58" font-size="8" font-family="Inter">Known formats</text>
+
+  <!-- Gemini Pro -->
+  <rect x="460" y="118" width="44" height="44" rx="8" fill="#F9AB00"/>
+  <text x="482" y="146" text-anchor="middle" fill="#1a1500" font-size="11" font-weight="700" font-family="Inter">GP</text>
+  <text x="482" y="176" text-anchor="middle" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Gemini Pro</text>
+  <text x="482" y="188" text-anchor="middle" fill="#484f58" font-size="8" font-family="Inter">Complex / OCR</text>
+
+  <!-- Document AI -->
+  <rect x="575" y="118" width="44" height="44" rx="8" fill="#F9AB00"/>
+  <text x="597" y="146" text-anchor="middle" fill="#1a1500" font-size="11" font-weight="700" font-family="Inter">DA</text>
+  <text x="597" y="176" text-anchor="middle" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Document AI</text>
+  <text x="597" y="188" text-anchor="middle" fill="#484f58" font-size="8" font-family="Inter">OCR fallback</text>
+
+  <!-- Embeddings -->
+  <rect x="690" y="118" width="44" height="44" rx="8" fill="#F9AB00"/>
+  <text x="712" y="146" text-anchor="middle" fill="#1a1500" font-size="11" font-weight="700" font-family="Inter">E</text>
+  <text x="712" y="176" text-anchor="middle" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Embeddings</text>
+  <text x="712" y="188" text-anchor="middle" fill="#484f58" font-size="8" font-family="Inter">text-embedding-004</text>
+
+  <!-- ============ APPLICATION LAYER (center) ============ -->
+  <rect x="210" y="230" width="650" height="240" rx="8" fill="rgba(66,133,244,0.03)" stroke="rgba(66,133,244,0.15)" stroke-width="1" stroke-dasharray="6,3"/>
+  <text x="230" y="249" fill="#4285F4" font-size="8" font-weight="700" letter-spacing="1.5" font-family="Inter,sans-serif">APPLICATION LAYER</text>
+
+  <!-- Cloud Run -->
+  <rect x="235" y="265" width="44" height="44" rx="8" fill="#4285F4"/>
+  <text x="257" y="292" text-anchor="middle" fill="#fff" font-size="12" font-weight="700" font-family="Inter">CR</text>
+  <text x="257" y="324" text-anchor="middle" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Cloud Run</text>
+  <text x="257" y="336" text-anchor="middle" fill="#484f58" font-size="8" font-family="Inter">FastAPI</text>
+
+  <!-- 5-Stage Pipeline boxes -->
+  <rect x="330" y="268" width="72" height="34" rx="5" fill="#1565c0"/>
+  <text x="366" y="289" text-anchor="middle" fill="#fff" font-size="9" font-weight="600" font-family="Inter">Classify</text>
+
+  <rect x="416" y="268" width="62" height="34" rx="5" fill="#1565c0"/>
+  <text x="447" y="289" text-anchor="middle" fill="#fff" font-size="9" font-weight="600" font-family="Inter">Parse</text>
+
+  <rect x="492" y="268" width="68" height="34" rx="5" fill="#1565c0"/>
+  <text x="526" y="289" text-anchor="middle" fill="#fff" font-size="9" font-weight="600" font-family="Inter">Extract</text>
+
+  <rect x="574" y="268" width="62" height="34" rx="5" fill="#1565c0"/>
+  <text x="605" y="289" text-anchor="middle" fill="#fff" font-size="9" font-weight="600" font-family="Inter">Merge</text>
+
+  <rect x="650" y="268" width="72" height="34" rx="5" fill="#1565c0"/>
+  <text x="686" y="289" text-anchor="middle" fill="#fff" font-size="9" font-weight="600" font-family="Inter">Validate</text>
+
+  <!-- Pipeline arrows -->
+  <line x1="402" y1="285" x2="414" y2="285" stroke="#93c5fd" stroke-width="1" marker-end="url(#ah)"/>
+  <line x1="478" y1="285" x2="490" y2="285" stroke="#93c5fd" stroke-width="1" marker-end="url(#ah)"/>
+  <line x1="560" y1="285" x2="572" y2="285" stroke="#93c5fd" stroke-width="1" marker-end="url(#ah)"/>
+  <line x1="636" y1="285" x2="648" y2="285" stroke="#93c5fd" stroke-width="1" marker-end="url(#ah)"/>
+
+  <!-- Cloud Tasks -->
+  <rect x="330" y="330" width="44" height="44" rx="8" fill="#7B1FA2"/>
+  <text x="352" y="356" text-anchor="middle" fill="#fff" font-size="11" font-weight="700" font-family="Inter">CT</text>
+  <text x="352" y="388" text-anchor="middle" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Cloud Tasks</text>
+  <text x="352" y="400" text-anchor="middle" fill="#484f58" font-size="8" font-family="Inter">Async queue</text>
+
+  <!-- Memorystore -->
+  <rect x="430" y="330" width="44" height="44" rx="8" fill="#DC382D"/>
+  <text x="452" y="356" text-anchor="middle" fill="#fff" font-size="11" font-weight="700" font-family="Inter">MS</text>
+  <text x="452" y="388" text-anchor="middle" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Memorystore</text>
+  <text x="452" y="400" text-anchor="middle" fill="#484f58" font-size="8" font-family="Inter">Redis</text>
+
+  <!-- Claude API -->
+  <rect x="535" y="330" width="44" height="44" rx="8" fill="#7C3AED"/>
+  <text x="557" y="356" text-anchor="middle" fill="#fff" font-size="11" font-weight="700" font-family="Inter">CL</text>
+  <text x="557" y="388" text-anchor="middle" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Claude API</text>
+  <text x="557" y="400" text-anchor="middle" fill="#484f58" font-size="8" font-family="Inter">Merge &amp; Judge</text>
+
+  <!-- LangFuse -->
+  <rect x="640" y="330" width="44" height="44" rx="8" fill="#161b22" stroke="rgba(255,255,255,0.1)"/>
+  <text x="662" y="356" text-anchor="middle" fill="#8b949e" font-size="11" font-weight="700" font-family="Inter">LF</text>
+  <text x="662" y="388" text-anchor="middle" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">LangFuse</text>
+  <text x="662" y="400" text-anchor="middle" fill="#484f58" font-size="8" font-family="Inter">LLM tracing</text>
+
+  <!-- ============ INGESTION (left) ============ -->
+  <rect x="50" y="85" width="130" height="385" rx="8" fill="rgba(52,168,83,0.03)" stroke="rgba(52,168,83,0.15)" stroke-width="1" stroke-dasharray="6,3"/>
+  <text x="70" y="104" fill="#34A853" font-size="8" font-weight="700" letter-spacing="1.5" font-family="Inter,sans-serif">INGESTION</text>
+
+  <!-- Documents -->
+  <rect x="78" y="120" width="44" height="44" rx="8" fill="#161b22" stroke="rgba(255,255,255,0.1)"/>
+  <text x="100" y="148" text-anchor="middle" fill="#8b949e" font-size="14" font-weight="700" font-family="Inter">D</text>
+  <text x="100" y="180" text-anchor="middle" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Documents</text>
+  <text x="100" y="192" text-anchor="middle" fill="#484f58" font-size="7" font-family="Inter">Invoices · CSRs</text>
+  <text x="100" y="202" text-anchor="middle" fill="#484f58" font-size="7" font-family="Inter">Contracts · Reports</text>
+
+  <!-- Cloud Storage -->
+  <rect x="78" y="230" width="44" height="44" rx="8" fill="#34A853"/>
+  <text x="100" y="257" text-anchor="middle" fill="#fff" font-size="11" font-weight="700" font-family="Inter">CS</text>
+  <text x="100" y="290" text-anchor="middle" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Cloud</text>
+  <text x="100" y="301" text-anchor="middle" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Storage</text>
+
+  <!-- Pub/Sub -->
+  <rect x="78" y="340" width="44" height="44" rx="8" fill="#7B1FA2"/>
+  <text x="100" y="367" text-anchor="middle" fill="#fff" font-size="11" font-weight="700" font-family="Inter">PS</text>
+  <text x="100" y="400" text-anchor="middle" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Pub/Sub</text>
+
+  <!-- Ingestion vertical arrows -->
+  <line x1="100" y1="166" x2="100" y2="228" stroke="#34A853" stroke-width="1.2" marker-end="url(#ah-green)"/>
+  <line x1="100" y1="276" x2="100" y2="338" stroke="#34A853" stroke-width="1.2" marker-end="url(#ah-green)"/>
+
+  <!-- ============ DATA LAYER (right) ============ -->
+  <rect x="900" y="85" width="220" height="385" rx="8" fill="rgba(66,133,244,0.03)" stroke="rgba(102,157,246,0.15)" stroke-width="1" stroke-dasharray="6,3"/>
+  <text x="920" y="104" fill="#669DF6" font-size="8" font-weight="700" letter-spacing="1.5" font-family="Inter,sans-serif">DATA LAYER</text>
+
+  <!-- Cloud SQL -->
+  <rect x="928" y="125" width="44" height="44" rx="8" fill="#4285F4"/>
+  <text x="950" y="152" text-anchor="middle" fill="#fff" font-size="11" font-weight="700" font-family="Inter">SQ</text>
+  <text x="1010" y="142" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Cloud SQL</text>
+  <text x="1010" y="155" fill="#484f58" font-size="8" font-family="Inter">PostgreSQL 16 + pgvector</text>
+
+  <!-- BigQuery -->
+  <rect x="928" y="210" width="44" height="44" rx="8" fill="#669DF6"/>
+  <text x="950" y="237" text-anchor="middle" fill="#fff" font-size="11" font-weight="700" font-family="Inter">BQ</text>
+  <text x="1010" y="227" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">BigQuery</text>
+  <text x="1010" y="240" fill="#484f58" font-size="8" font-family="Inter">Analytics warehouse</text>
+
+  <!-- Cloud Storage (cache) -->
+  <rect x="928" y="295" width="44" height="44" rx="8" fill="#34A853"/>
+  <text x="950" y="322" text-anchor="middle" fill="#fff" font-size="11" font-weight="700" font-family="Inter">CS</text>
+  <text x="1010" y="312" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Cloud Storage</text>
+  <text x="1010" y="325" fill="#484f58" font-size="8" font-family="Inter">Parsed docs · Cache</text>
+
+  <!-- SQL to BQ arrow -->
+  <line x1="950" y1="171" x2="950" y2="208" stroke="#669DF6" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#ah)"/>
+
+  <!-- ============ PRESENTATION LAYER (far right) ============ -->
+  <rect x="1160" y="85" width="190" height="385" rx="8" fill="rgba(161,66,244,0.03)" stroke="rgba(161,66,244,0.12)" stroke-width="1" stroke-dasharray="6,3"/>
+  <text x="1180" y="104" fill="#A142F4" font-size="8" font-weight="700" letter-spacing="1.5" font-family="Inter,sans-serif">PRESENTATION</text>
+
+  <!-- Next.js -->
+  <rect x="1188" y="125" width="44" height="44" rx="8" fill="#A142F4"/>
+  <text x="1210" y="152" text-anchor="middle" fill="#fff" font-size="11" font-weight="700" font-family="Inter">NJ</text>
+  <text x="1262" y="142" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Next.js UI</text>
+  <text x="1262" y="155" fill="#484f58" font-size="8" font-family="Inter">Review · Export</text>
+
+  <!-- Looker -->
+  <rect x="1188" y="210" width="44" height="44" rx="8" fill="#669DF6"/>
+  <text x="1210" y="237" text-anchor="middle" fill="#fff" font-size="11" font-weight="700" font-family="Inter">LS</text>
+  <text x="1262" y="227" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Looker Studio</text>
+  <text x="1262" y="240" fill="#484f58" font-size="8" font-family="Inter">Dashboards</text>
+
+  <!-- End Users -->
+  <rect x="1188" y="305" width="44" height="44" rx="8" fill="#161b22" stroke="rgba(255,255,255,0.1)"/>
+  <text x="1210" y="332" text-anchor="middle" fill="#8b949e" font-size="14" font-weight="700" font-family="Inter">U</text>
+  <text x="1262" y="322" fill="#c9d1d9" font-size="9" font-weight="600" font-family="Inter">Reviewers</text>
+  <text x="1262" y="335" fill="#484f58" font-size="8" font-family="Inter">Analysts · Managers</text>
+
+  <!-- ============ CONNECTION LINES ============ -->
+
+  <!-- Ingestion → Application: Pub/Sub to Cloud Run -->
+  <path d="M124,362 L210,362 L210,287 L328,287" fill="none" stroke="#34A853" stroke-width="1.3" marker-end="url(#ah-green)"/>
+
+  <!-- Cloud Run to Pipeline (internal) -->
+  <line x1="279" y1="287" x2="328" y2="285" stroke="#4285F4" stroke-width="1" marker-end="url(#ah)"/>
+
+  <!-- Analytics → Application: Gemini to Extract stage -->
+  <path d="M367,164 L367,200 L526,200 L526,266" fill="none" stroke="#F9AB00" stroke-width="1.3" marker-end="url(#ah-yellow)"/>
+  <path d="M482,164 L482,200" fill="none" stroke="#F9AB00" stroke-width="1" stroke-dasharray="4,3"/>
+  <path d="M597,164 L597,200 L597,245 L540,245 L540,266" fill="none" stroke="#F9AB00" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- Embeddings → Data (pgvector) -->
+  <path d="M736,140 L860,140 L860,147 L926,147" fill="none" stroke="#F9AB00" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#ah-yellow)"/>
+
+  <!-- Application → Data: Validate to Cloud SQL -->
+  <path d="M724,285 L812,285 L812,147 L926,147" fill="none" stroke="#4285F4" stroke-width="1.3" marker-end="url(#ah)"/>
+
+  <!-- Application → Data: Merge to Cloud Storage (cache) -->
+  <path d="M662,376 L780,376 L780,317 L926,317" fill="none" stroke="#4285F4" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#ah)"/>
+
+  <!-- Claude API → Merge stage -->
+  <line x1="557" y1="328" x2="605" y2="304" stroke="#7C3AED" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#ah-violet)"/>
+
+  <!-- Data → Presentation: Cloud SQL to Next.js -->
+  <path d="M974,147 L1080,147 L1080,147 L1186,147" fill="none" stroke="#669DF6" stroke-width="1.3" marker-end="url(#ah)"/>
+
+  <!-- Data → Presentation: BigQuery to Looker -->
+  <path d="M974,232 L1186,232" fill="none" stroke="#669DF6" stroke-width="1.3" marker-end="url(#ah)"/>
+
+  <!-- Presentation: Next.js to Users -->
+  <line x1="1210" y1="171" x2="1210" y2="303" stroke="#A142F4" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#ah-purple)"/>
+
+  <!-- Ingestion: Cloud Storage to App (parsed docs) -->
+  <path d="M124,252 L210,252 L210,350 L235,350" fill="none" stroke="#34A853" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#ah-green)"/>
+
+  <!-- ============ SELF-HEALING CONTROL PLANE ============ -->
+  <rect x="50" y="510" width="1070" height="80" rx="8" fill="rgba(0,188,212,0.02)" stroke="rgba(0,188,212,0.2)" stroke-width="1" stroke-dasharray="6,3"/>
+  <text x="70" y="529" fill="#00BCD4" font-size="8" font-weight="700" letter-spacing="1.5" font-family="Inter,sans-serif">SELF-HEALING CONTROL PLANE</text>
+
+  <!-- Self-healing nodes -->
+  <rect x="80" y="545" width="36" height="30" rx="5" fill="rgba(0,188,212,0.12)" stroke="rgba(0,188,212,0.3)"/>
+  <text x="98" y="564" text-anchor="middle" fill="#00BCD4" font-size="8" font-weight="600" font-family="Inter">Extract</text>
+
+  <rect x="180" y="545" width="36" height="30" rx="5" fill="rgba(0,188,212,0.12)" stroke="rgba(0,188,212,0.3)"/>
+  <text x="198" y="564" text-anchor="middle" fill="#00BCD4" font-size="8" font-weight="600" font-family="Inter">Validate</text>
+
+  <rect x="290" y="545" width="44" height="30" rx="5" fill="rgba(0,188,212,0.12)" stroke="rgba(0,188,212,0.3)"/>
+  <text x="312" y="564" text-anchor="middle" fill="#00BCD4" font-size="8" font-weight="600" font-family="Inter">Review</text>
+
+  <rect x="408" y="545" width="56" height="30" rx="5" fill="rgba(0,188,212,0.12)" stroke="rgba(0,188,212,0.3)"/>
+  <text x="436" y="564" text-anchor="middle" fill="#00BCD4" font-size="8" font-weight="600" font-family="Inter">Corrections</text>
+
+  <rect x="538" y="545" width="50" height="30" rx="5" fill="rgba(0,188,212,0.12)" stroke="rgba(0,188,212,0.3)"/>
+  <text x="563" y="564" text-anchor="middle" fill="#00BCD4" font-size="8" font-weight="600" font-family="Inter">Few-Shot</text>
+
+  <rect x="658" y="545" width="60" height="30" rx="5" fill="rgba(0,188,212,0.12)" stroke="rgba(0,188,212,0.3)"/>
+  <text x="688" y="564" text-anchor="middle" fill="#00BCD4" font-size="8" font-weight="600" font-family="Inter">Confidence</text>
+
+  <rect x="790" y="545" width="48" height="30" rx="5" fill="rgba(0,188,212,0.12)" stroke="rgba(0,188,212,0.3)"/>
+  <text x="814" y="564" text-anchor="middle" fill="#00BCD4" font-size="8" font-weight="600" font-family="Inter">Domain</text>
+
+  <!-- SH arrows -->
+  <line x1="118" y1="560" x2="178" y2="560" stroke="#00BCD4" stroke-width="1" opacity="0.4" marker-end="url(#ah-cyan)"/>
+  <line x1="218" y1="560" x2="288" y2="560" stroke="#00BCD4" stroke-width="1" opacity="0.4" marker-end="url(#ah-cyan)"/>
+  <line x1="336" y1="560" x2="406" y2="560" stroke="#00BCD4" stroke-width="1" opacity="0.4" marker-end="url(#ah-cyan)"/>
+  <line x1="466" y1="560" x2="536" y2="560" stroke="#00BCD4" stroke-width="1" opacity="0.4" marker-end="url(#ah-cyan)"/>
+  <line x1="590" y1="560" x2="656" y2="560" stroke="#00BCD4" stroke-width="1" opacity="0.4" marker-end="url(#ah-cyan)"/>
+  <line x1="720" y1="560" x2="788" y2="560" stroke="#00BCD4" stroke-width="1" opacity="0.4" marker-end="url(#ah-cyan)"/>
+
+  <!-- SH loop-back arrow -->
+  <path d="M840,560 Q880,560 880,530 Q880,505 500,505 Q80,505 80,530 L80,543" fill="none" stroke="#00BCD4" stroke-width="1" opacity="0.3" stroke-dasharray="4,3" marker-end="url(#ah-cyan)"/>
+
+  <!-- App → Self-Healing connection -->
+  <path d="M526,304 L526,420 L450,420 L450,508" fill="none" stroke="#00BCD4" stroke-width="1.2" stroke-dasharray="5,3" marker-end="url(#ah-cyan)"/>
+  <text x="540" y="418" fill="#00BCD4" font-size="7" font-family="Inter" opacity="0.6">feedback loop</text>
+
+  <!-- Self-Healing → App connection (back up) -->
+  <path d="M98,543 L98,430 L300,430 L300,302" fill="none" stroke="#00BCD4" stroke-width="1" stroke-dasharray="5,3" marker-end="url(#ah-cyan)"/>
+
+  <!-- ============ SECURITY & GOVERNANCE ============ -->
+  <rect x="50" y="620" width="1300" height="55" rx="8" fill="rgba(234,67,53,0.02)" stroke="rgba(234,67,53,0.12)" stroke-width="1"/>
+  <text x="70" y="639" fill="#EA4335" font-size="8" font-weight="700" letter-spacing="1.5" font-family="Inter,sans-serif">SECURITY &amp; GOVERNANCE</text>
+
+  <rect x="70" y="648" width="60" height="18" rx="3" fill="rgba(234,67,53,0.06)" stroke="rgba(234,67,53,0.1)"/>
+  <text x="100" y="660" text-anchor="middle" fill="#484f58" font-size="7" font-weight="500" font-family="Inter">Cloud IAM</text>
+
+  <rect x="140" y="648" width="80" height="18" rx="3" fill="rgba(234,67,53,0.06)" stroke="rgba(234,67,53,0.1)"/>
+  <text x="180" y="660" text-anchor="middle" fill="#484f58" font-size="7" font-weight="500" font-family="Inter">Secret Manager</text>
+
+  <rect x="230" y="648" width="36" height="18" rx="3" fill="rgba(234,67,53,0.06)" stroke="rgba(234,67,53,0.1)"/>
+  <text x="248" y="660" text-anchor="middle" fill="#484f58" font-size="7" font-weight="500" font-family="Inter">VPC</text>
+
+  <rect x="276" y="648" width="72" height="18" rx="3" fill="rgba(234,67,53,0.06)" stroke="rgba(234,67,53,0.1)"/>
+  <text x="312" y="660" text-anchor="middle" fill="#484f58" font-size="7" font-weight="500" font-family="Inter">Cloud Armor</text>
+
+  <rect x="358" y="648" width="78" height="18" rx="3" fill="rgba(234,67,53,0.06)" stroke="rgba(234,67,53,0.1)"/>
+  <text x="397" y="660" text-anchor="middle" fill="#484f58" font-size="7" font-weight="500" font-family="Inter">Cloud Logging</text>
+
+  <rect x="446" y="648" width="88" height="18" rx="3" fill="rgba(234,67,53,0.06)" stroke="rgba(234,67,53,0.1)"/>
+  <text x="490" y="660" text-anchor="middle" fill="#484f58" font-size="7" font-weight="500" font-family="Inter">Cloud Monitoring</text>
+
+  <rect x="544" y="648" width="82" height="18" rx="3" fill="rgba(234,67,53,0.06)" stroke="rgba(234,67,53,0.1)"/>
+  <text x="585" y="660" text-anchor="middle" fill="#484f58" font-size="7" font-weight="500" font-family="Inter">Artifact Registry</text>
+
+  <rect x="636" y="648" width="68" height="18" rx="3" fill="rgba(234,67,53,0.06)" stroke="rgba(234,67,53,0.1)"/>
+  <text x="670" y="660" text-anchor="middle" fill="#484f58" font-size="7" font-weight="500" font-family="Inter">Cloud Build</text>
+
+  <!-- ============ EXTERNAL INTEGRATIONS ============ -->
+  <rect x="50" y="700" width="1300" height="55" rx="8" fill="rgba(255,255,255,0.01)" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+  <text x="70" y="719" fill="#484f58" font-size="8" font-weight="700" letter-spacing="1.5" font-family="Inter,sans-serif">EXTERNAL INTEGRATIONS</text>
+
+  <rect x="70" y="730" width="44" height="18" rx="3" fill="rgba(124,58,237,0.1)" stroke="rgba(124,58,237,0.2)"/>
+  <text x="92" y="742" text-anchor="middle" fill="#7C3AED" font-size="7" font-weight="600" font-family="Inter">Claude</text>
+  <text x="130" y="742" fill="#484f58" font-size="7" font-family="Inter">Anthropic API — Cross-doc merge, LLM eval judge</text>
+
+  <rect x="420" y="730" width="60" height="18" rx="3" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+  <text x="450" y="742" text-anchor="middle" fill="#484f58" font-size="7" font-weight="600" font-family="Inter">Carriers</text>
+  <text x="496" y="742" fill="#484f58" font-size="7" font-family="Inter">AT&amp;T · Windstream · Spectrum · Peerless — Portal integrations (future)</text>
+
+  <!-- ============ FOOTER ============ -->
+  <text x="50" y="790" fill="#484f58" font-size="9" font-family="Inter">Techjays, INC × Digital Direction · Google Cloud Funded Engagement · Chicago, IL · April 2026</text>
+  <text x="1350" y="790" text-anchor="end" fill="#484f58" font-size="9" font-family="Inter">Config-driven · Zero-template · Self-healing extraction</text>
+
+</svg>
+</body>
+</html>

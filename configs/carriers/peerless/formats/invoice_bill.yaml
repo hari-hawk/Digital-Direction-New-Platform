@@ -1,0 +1,31 @@
+name: "Peerless Network Invoice/Bill"
+version: "1.0"
+
+signature:
+  required_patterns:
+    - "(Peerless|Infobip)"
+  any_of_patterns:
+    - "Amount Due"
+    - "BILL"
+    - "Invoice"
+    - "SIP Trunk"
+
+processing_path: "raw_text"
+
+chunking:
+  global_context_source: "first_page"
+  pages_per_chunk: 3
+
+extractable_fields:
+  high_confidence:
+    - carrier_account_number
+    - billing_name
+    - service_address_1
+    - monthly_recurring_cost
+    - invoice_file_name
+    - charge_type
+  medium_confidence:
+    - service_type
+    - component_or_feature_name
+    - quantity
+    - cost_per_unit

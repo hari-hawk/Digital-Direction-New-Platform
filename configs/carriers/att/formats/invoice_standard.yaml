@@ -1,0 +1,51 @@
+name: "AT&T Invoice - Standard Multi-Page"
+version: "1.0"
+
+signature:
+  required_patterns:
+    - "AccountNumber"
+    - "BillingDate"
+  any_of_patterns:
+    - "PlansandServices"
+    - "MonthlyService"
+    - "TotalAmountDue"
+    - "Bill-At-A-Glance"
+
+# Using raw_text instead of docling because:
+# 1. AT&T invoices have two-column layout that pdfplumber handles adequately
+# 2. Boundary regex (Billedfor) works on raw text but not Docling markdown
+# 3. Docling returns entire doc as one block (179K chars) — too large for single LLM call
+# TODO: Revisit Docling when we implement proper markdown chunking
+processing_path: "raw_text"
+
+chunking:
+  global_context_source: "first_page"
+  # AT&T invoices use page-based chunking (2-3 pages per chunk)
+  # Boundary-based chunking fails due to two-column layout false matches
+  # Page-based is reliable and each chunk is small enough for accurate extraction
+  pages_per_chunk: 3
+  validation_section: null
+
+extractable_fields:
+  high_confidence:
+    - billing_name
+    - service_address_1
+    - city
+    - state
+    - zip
+    - carrier_account_number
+    - monthly_recurring_cost
+    - charge_type
+    - invoice_file_name
+  medium_confidence:
+    - phone_number
+    - btn
+    - component_or_feature_name
+    - service_type
+    - num_calls
+    - ld_minutes
+    - ld_cost
+  low_confidence:
+    - contract_term_months
+    - contract_begin_date
+    - contract_expiration_date

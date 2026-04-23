@@ -1,0 +1,72 @@
+name: "AT&T CSR - Section Marker Format"
+version: "1.1"
+
+signature:
+  required_patterns:
+    - "---LISTINGS---"
+    - "---BILL---"
+    - "ACCOUNT\\s+\\d+\\s+BILLDATE"
+  any_of_patterns:
+    - "---INDEX---"
+    - "---REVENUE AMOUNTS---"
+    - "---RMKS---"
+    - "---EQUIPMENT---"
+
+processing_path: "raw_text"
+
+chunking:
+  global_context_source: "first_page"
+  section_markers:
+    - "---LISTINGS---"
+    - "---DIRECTORY DELIVERY---"
+    - "---BILL---"
+    - "---RMKS---"
+    - "---EQUIPMENT---"
+    - "---REVENUE AMOUNTS---"
+    - "---INDEX---"
+  # boundary_pattern is per-TN (e.g., "567 3328 B1W") — useful for
+  # sub-chunking within EQUIPMENT on large CSRs, but NOT for primary chunking.
+  # Primary chunking uses section_markers above.
+  validation_section: "---REVENUE AMOUNTS---"
+
+extractable_fields:
+  high_confidence:
+    - billing_name
+    - service_address_1
+    - city
+    - state
+    - zip
+    - carrier_account_number
+    - btn
+    - phone_number
+    - usoc
+    - monthly_recurring_cost
+    - service_type
+  medium_confidence:
+    - component_or_feature_name
+    - contract_term_months
+    - contract_begin_date
+    - contract_expiration_date
+    - currently_month_to_month
+    - auto_renew
+    - quantity
+  not_available:
+    - invoice_file_name
+    - charge_type
+    - ld_minutes
+
+field_rules:
+  contract_start_date:
+    source_field: "CNTS"
+    pattern: "^(\\d{8})"
+    format: "YYYYMMDD"
+  contract_term:
+    source_field: "TACC"
+    keywords: ["1YR", "2YR", "3YR", "5YR", "MTM"]
+  term_agreement:
+    source_field: "/TA"
+    pattern: "(\\d+),(\\d{2}-\\d{2}-\\d{2})"
+    description: "Per-TN term: months,start-date"
+  renewal_info:
+    source_field: "RMKR"
+    keywords: ["RENEWAL", "VERBAL", "MNTH", "AUTO"]

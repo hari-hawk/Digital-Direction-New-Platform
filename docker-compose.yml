@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: digital_direction
+      POSTGRES_USER: dd_user
+      POSTGRES_PASSWORD: dd_local_dev
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/00_create_langfuse_db.sh:/docker-entrypoint-initdb.d/00_create_langfuse_db.sh
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dd_user -d digital_direction"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  langfuse:
+    image: langfuse/langfuse:2
+    ports:
+      - "3100:3000"
+    environment:
+      DATABASE_URL: postgresql://dd_user:dd_local_dev@postgres:5432/langfuse
+      NEXTAUTH_SECRET: langfuse-local-dev-secret
+      NEXTAUTH_URL: http://localhost:3100
+      SALT: langfuse-local-salt
+      TELEMETRY_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:

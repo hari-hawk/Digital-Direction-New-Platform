@@ -1,0 +1,8 @@
+# AT&T Service Type Codes
+
+BLC: "Business Local Calling"
+CTX: "Centrex"
+POTS: "Plain Old Telephone Service"
+PRI: "Primary Rate Interface"
+BRI: "Basic Rate Interface"
+DID: "Direct Inward Dialing"

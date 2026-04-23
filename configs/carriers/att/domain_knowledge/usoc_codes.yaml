@@ -1,0 +1,87 @@
+# AT&T USOC Code → Human-Readable Description
+# Source: AT&T USOC catalog, CSR ACCOUNT SUMMARY sections, AT&T Service Guide.
+# These are standard carrier-defined service codes — NOT client data.
+#
+# How this file is used:
+#   The merger's USOC enrichment step (in _apply_field_normalization) checks if
+#   component_or_feature_name looks like a raw USOC code (short, uppercase).
+#   If found here, the code is replaced with the description.
+
+# === Station / Line Types ===
+"1MB": "Individual Message Business"
+"LMB": "Measured Rate Business"
+"SXPAA": "Centrex Station Appearance"
+
+# === Centrex Features ===
+"CPXHE": "Ctx Icom Billing Access Area"
+"CPXHF": "Standard Centrex Feature"
+"CPXHX": "Standard Centrex Feature"
+"CPXJC": "Min. Usage Charge"
+"SXS": "Supplmntl Tel Nmbr Chg"
+"RV8TX": "Centrex Reserved TN"
+"NDC": "Unlimited Local Usage"
+"CZA": "Feature Package A - Per Line"
+"CLT": "Additional Directory Listing"
+
+# === CO / Termination ===
+"C6OTT": "CO Termination With Touchtone"
+"TTB": "Touchtone Business"
+
+# === Calling Features ===
+"N8D": "Calling Name Display"
+"NSD": "Caller Identification"
+"NBJ": "Caller Identification"
+"ESC": "Caller Identification"
+"ESM": "Speed Calling"
+"ESX": "Automatic Callback"
+"NSS": "Selective Call Screening"
+"NSQ": "Repeat Dialing"
+"NMP": "Calling Name Display"
+"ZCFV1": "Call Forwarding"
+"ZCSAC": "Three Way Calling"
+"ZCVLD": "Call Waiting"
+"NP": "Non-Published Service"
+"NP3": "Non-Published Service"
+"NPU": "Non-Published Service"
+"FYW": "Abbreviated Toll Free Service"
+"RTV1N": "900/976 Call Blocking"
+"NW1TD": "Network 1-Way Trunk Dialing"
+
+# === Charges / Surcharges ===
+"NALDC": "Line Charge"
+"9ZR": "Federal Access Charge"
+"9LM": "Federal Access Charge"
+"9PZLM": "Federal Universal Service Fee"
+"9PZLX": "Federal Universal Service Fee"
+"9PZBU": "Federal USF - Single Line-BUS"
+"NSR": "Number Portability Surcharge"
+"UXT25": "9-1-1 Emergency System"
+"UXT21": "9-1-1 Service Charge"
+"C8RCD": "Cost Assessment Charge"
+"AHL": "Telecommunications Relay Surcharge"
+"URS": "Universal Service Fund"
+"QSR": "Universal Service Fee (State)"
+"XRELD": "Relay Service"
+"REB2A": "Single No PIC Federal Chrg"
+"REB2B": "Single No PIC State Chrg"
+"REB3A": "MultiLn No PIC Federal Chrg"
+"REB3B": "MultiLn No PIC State Chrg"
+
+# === Packages / Plans ===
+"PGO9T": "Bus Local Calling Unlimited B"
+"QBBUX": "Bus Local Calling Unlimited B"
+"QBPUL": "Feature Package A - Per Line"
+"MNTPB": "Line Backer-Inside wiring"
+
+# === Paper / Billing ===
+"KSTA7": "Paper Bill Suppression"
+"BKM": "Block Misc Charge Record"
+
+# === Toll / Long Distance ===
+"O8ZLX": "800 ICB Usage"
+"OEZKX": "Interstate ICB Usage"
+"OTZLX": "IntraLATA ICB Usage"
+
+# === Equipment / Infrastructure ===
+"UDP1X": "Common Equipment Conversion Charge"
+"ZSCUR": "Secure Trunk"

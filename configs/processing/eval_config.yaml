@@ -1,0 +1,65 @@
+# Eval framework configuration — field extractability + accuracy targets
+#
+# Three extractability categories:
+#   extractable:      Score these. Mismatches are extraction bugs to fix.
+#   analyst_judgment:  Don't score. Values added by analyst from external knowledge.
+#   derived:           Don't score. Values the analyst calculated or formatted differently.
+#
+# Everything not listed defaults to "extractable".
+
+default_field_extractability:
+  analyst_judgment:
+    - status                    # Workflow status ("Complete") — analyst tracking
+    - notes                     # Analyst commentary
+    - contract_info_received    # "Yes on Email" — analyst workflow tracking
+    - files_used                # Analyst's source file tracking
+    - billing_per_contract      # Analyst's rate comparison judgment
+    - contract_file_name        # Analyst's file naming convention
+    - mtm_or_less_than_year     # Borderline: derivable from dates but analyst applies business rules
+
+  derived:
+    - conversion_rate           # Always 1.0 for USD — analyst convention, not extracted
+    - mrc_per_currency          # Calculated: MRC * conversion_rate
+    - invoice_file_name         # Naming convention differs (analyst vs pipeline filename)
+
+# Per-carrier overrides: configs/carriers/{carrier}/eval.yaml
+# Example: a carrier where contract_file_name IS extractable would override here.
+
+accuracy_targets:
+  structured: 0.95       # phones, accounts, amounts, dates
+  semi_structured: 0.85  # addresses, names, service types
+  fuzzy: 0.75            # component names, charge types
+  contract: 0.70         # contract fields (often missing source docs)
+
+# Row matching configuration
+row_matching:
+  # Phone normalization for matching
+  strip_excel_decimal: true     # Remove .0 from Excel numeric phone values
+  pad_7_to_10_from_account: true  # Pad 7-digit phones using account prefix
+
+  # Match key structure
+  # Pass 1: account + phone + row_type + usoc (C-rows only)
+  # Pass 2: account + phone (relaxed, for unmatched)
+  # Pass 3: account only (last resort, picks best by field similarity)
+  enable_relaxed_matching: true
+
+  # Row type normalization
+  row_type_aliases:
+    "T\\S\\OCC": "T"
+    "U": "U"
+    "S": "S"
+    "C": "C"
+
+  # Row filtering — exclude non-comparable extracted rows before matching.
+  # These rows are valid extraction output (kept in pipeline results) but have
+  # no golden data equivalent, so including them inflates extracted_only count
+  # and tanks match rate. Only applied to extracted rows, never golden.
+  #
+  # Golden data has all charge types (MRC, NRC, Usage, Surcharge, Taxes) so we
+  # do NOT filter by charge_type. Only exclude structurally non-comparable rows.
+  exclude_charge_types: []
+  # Exclude rows with BOTH null charge_type AND null row_type — these are
+  # report/structured data rows (e.g., inventory XLSX) that have no golden equivalent.
+  # Rows with charge_type=null but valid row_type (S/C) are kept — they're real
+  # extraction rows that just didn't classify charge type.
+  exclude_untyped_rows: true  # null charge_type AND null row_type

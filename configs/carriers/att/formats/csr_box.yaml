@@ -1,0 +1,48 @@
+name: "AT&T CSR - Box Format"
+version: "1.0"
+
+signature:
+  required_patterns:
+    - "!-{10,}"
+    - "CUSTOMER SERVICE RECORD"
+  any_of_patterns:
+    - "!BL.*!CODE"
+    - "SUBTOTAL"
+    - "ACCOUNT SUMMARY"
+
+processing_path: "raw_text"
+
+chunking:
+  global_context_source: "first_page"
+  # Box-format CSRs are dense (fixed-width columns with USOC tables).
+  # 5 pages was too large — Gemini thinking tokens cause 180s+ per section.
+  # 3 pages keeps each chunk within fast extraction range.
+  pages_per_chunk: 3
+  validation_section: "SERV & EQUIP ACCOUNT SUMMARY"
+
+extractable_fields:
+  high_confidence:
+    - billing_name
+    - service_address_1
+    - city
+    - state
+    - zip
+    - carrier_account_number
+    - btn
+    - phone_number
+    - usoc
+    - monthly_recurring_cost
+  medium_confidence:
+    - component_or_feature_name
+    - quantity
+    - service_type
+    # Contract dates extractable from /TA fields on per-TN lines
+    # (e.g., "/TA 12, 12-02-24" → term=12, begin=2024-12-02).
+    # Previously blocked because box format lacks CNTS, but /TA is present.
+    - contract_term_months
+    - contract_begin_date
+    - contract_expiration_date
+  not_available:
+    - invoice_file_name
+    - charge_type
+    - ld_minutes

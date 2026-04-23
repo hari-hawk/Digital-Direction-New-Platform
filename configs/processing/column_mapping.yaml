@@ -1,0 +1,113 @@
+# Column header → schema field mapping for structured data extraction
+#
+# Used by structured_extractor.py to map spreadsheet column headers to our 60-field schema.
+# These are CARRIER-LEVEL naming conventions, not client data.
+# Keys are normalized: lowercase, stripped, special chars removed.
+#
+# To add a new carrier's column convention, add entries here.
+# Per-carrier overrides: configs/carriers/{carrier}/column_mapping.yaml
+
+# Account / Identity
+parent id: master_account
+parent_account: master_account
+parent_name: billing_name
+parent account: master_account
+customer : carrier_account_number
+customer number: carrier_account_number
+account: carrier_account_number
+account : carrier_account_number
+account number: carrier_account_number
+billing account number: carrier_account_number
+billing_account_no: carrier_account_number
+source billing account: carrier_account_number
+service_account_no: sub_account_number_1
+subaccount number: sub_account_number_1
+subaccount: sub_account_number_1
+product account id: sub_account_number_1
+
+# Customer / Billing Name
+customer name: billing_name
+billing_account_name: billing_name
+account name: billing_name
+product account name: billing_name
+location: billing_name
+
+# Phone / TN
+tn: phone_number
+phone number: phone_number
+phone: phone_number
+btn: btn
+service_id: carrier_circuit_number
+did: phone_number
+active tn: phone_number
+
+# Circuit
+circuit id: carrier_circuit_number
+circuit_id: carrier_circuit_number
+carrier circuit number: carrier_circuit_number
+lec circuit id: carrier_circuit_number
+circuit cat: service_type
+circuit type: service_type_2
+
+# Address
+addr1: service_address_1
+address 1: service_address_1
+address: service_address_1
+service_account_addr_ln1: service_address_1
+service address: service_address_1
+addr2: service_address_2
+address 2: service_address_2
+service_account_addr_ln2: service_address_2
+city: city
+state: state
+zip: zip
+zip code: zip
+country: country
+
+# Service Info
+tn type: service_type
+tn status: status
+service type: service_type
+service_type: service_type
+product type: service_type
+circuit status: status
+description: component_or_feature_name
+service_features: component_or_feature_name
+service_attributes: additional_circuit_ids
+category: charge_type
+charge type: charge_type
+charge_type: charge_type
+charge code: usoc
+
+# Amounts
+amount: monthly_recurring_cost
+mrc: monthly_recurring_cost
+monthly amount: monthly_recurring_cost
+monthly recurring cost: monthly_recurring_cost
+quantity: quantity
+qty: quantity
+
+# Speed
+port speed: port_speed
+access speed: access_speed
+upload speed: upload_speed
+
+# Contract
+contract term months: contract_term_months
+contract  term months: contract_term_months
+contract begin date: contract_begin_date
+contract  begin date: contract_begin_date
+start date: contract_begin_date
+contract expiration date: contract_expiration_date
+contract  expiration date: contract_expiration_date
+end date: contract_expiration_date
+contract number: contract_number
+auto renew: auto_renew
+
+# Z Location
+z location: z_location_name
+z address 1: z_address_1
+z city: z_city
+z state: z_state
+z zip: z_zip
+z zip code: z_zip

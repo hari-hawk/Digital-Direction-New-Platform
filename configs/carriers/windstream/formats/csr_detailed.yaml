@@ -1,0 +1,28 @@
+name: "Windstream CSR - Detailed Provisioning Format"
+version: "1.0"
+
+signature:
+  required_patterns:
+    - "Bent Phone"
+    - "Sent Phone"
+  any_of_patterns:
+    - "Asoc Id"
+    - "Sunit Amt"
+    - "CENTREX LINK"
+
+processing_path: "raw_text"
+
+chunking:
+  global_context_source: "first_page"
+
+extractable_fields:
+  high_confidence:
+    - btn
+    - phone_number
+    - carrier_account_number
+    - monthly_recurring_cost
+    - usoc
+    - component_or_feature_name
+  medium_confidence:
+    - service_type
+    - carrier_circuit_number

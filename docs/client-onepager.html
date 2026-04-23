@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Digital Direction — Telecom Inventory Extraction</title>
+<style>
+  :root {
+    /* Digital Direction brand palette */
+    --brand-navy:      #0D205B;  /* primary */
+    --brand-navy-2:    #163567;  /* secondary navy */
+    --brand-navy-deep: #04113C;  /* deepest ink */
+    --brand-orange:    #F08F28;  /* accent / highlight */
+    --brand-lime:      #C4D82D;  /* subtle accent */
+    --brand-sky:       #A6CAE0;
+    --brand-mist:      #DCE2EE;
+    --brand-tint:      #EAEEF5;
+    --brand-paper:     #F3F5F9;
+
+    --ink:       var(--brand-navy-deep);
+    --ink-soft:  #434446;
+    --muted:     #7A99AC;
+    --line:      #DCE2EE;
+    --bg:        #ffffff;
+    --bg-soft:   var(--brand-paper);
+    --accent:    var(--brand-navy);
+    --accent-soft: var(--brand-tint);
+    --success:   #2F7D57;
+    --warn:      var(--brand-orange);
+    --chip-bg:   var(--brand-mist);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--brand-paper);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 960px;
+    margin: 32px auto;
+    background: var(--bg);
+    padding: 0;
+    border-radius: 12px;
+    box-shadow: 0 10px 40px rgba(13, 32, 91, 0.12);
+    overflow: hidden;
+  }
+
+  .brand-bar {
+    background: linear-gradient(90deg, var(--brand-navy) 0%, var(--brand-navy-2) 100%);
+    color: #fff;
+    padding: 22px 52px 20px 52px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 24px;
+    border-bottom: 3px solid var(--brand-orange);
+  }
+  .brand-bar .mark {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .brand-bar .mark .logo {
+    width: 34px;
+    height: 34px;
+    border-radius: 6px;
+    background: #fff;
+    color: var(--brand-navy);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 15px;
+    letter-spacing: -0.02em;
+  }
+  .brand-bar .wordmark {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+  .brand-bar .wordmark .thin { font-weight: 400; color: var(--brand-sky); }
+  .brand-bar .tagline {
+    font-size: 12px;
+    color: var(--brand-sky);
+    letter-spacing: 0.02em;
+    text-align: right;
+  }
+
+  .body-pad { padding: 32px 52px 44px 52px; }
+
+  header {
+    border-bottom: 2px solid var(--brand-navy);
+    padding-bottom: 18px;
+    margin-bottom: 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 24px;
+  }
+  header h1 {
+    font-size: 26px;
+    line-height: 1.2;
+    margin: 0 0 4px 0;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--brand-navy);
+  }
+  header .sub {
+    color: var(--ink-soft);
+    font-size: 13px;
+  }
+  header .meta {
+    text-align: right;
+    color: var(--muted);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  h2 {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 28px 0 10px 0;
+  }
+
+  p { margin: 0 0 10px 0; color: var(--ink-soft); }
+
+  .lead {
+    font-size: 15px;
+    color: var(--ink);
+    margin-bottom: 6px;
+  }
+  .lead strong { color: var(--ink); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 6px 0 0 0;
+    font-size: 13px;
+  }
+  th, td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  th {
+    background: var(--bg-soft);
+    color: var(--ink);
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  td.num { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 600; }
+
+  /* Pipeline flow */
+  .pipeline {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+    margin: 12px 0 6px 0;
+  }
+  .stage {
+    position: relative;
+    background: var(--accent-soft);
+    border: 1px solid var(--brand-mist);
+    border-radius: 8px;
+    padding: 10px 12px;
+    text-align: center;
+  }
+  .stage .num {
+    display: inline-block;
+    font-size: 11px;
+    color: var(--brand-orange);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+  }
+  .stage .name {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--ink);
+    margin-top: 2px;
+  }
+  .stage::after {
+    content: "›";
+    position: absolute;
+    right: -10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 18px;
+    z-index: 2;
+  }
+  .stage:last-child::after { display: none; }
+
+  .flow-ends {
+    display: flex;
+    justify-content: space-between;
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-top: 4px;
+  }
+
+  /* Two-column info */
+  .cols-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+
+  ul.clean {
+    margin: 4px 0 0 0;
+    padding-left: 18px;
+  }
+  ul.clean li {
+    margin-bottom: 4px;
+    color: var(--ink-soft);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .chip {
+    background: var(--chip-bg);
+    color: var(--ink-soft);
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 11.5px;
+  }
+
+  .callout {
+    background: var(--bg-soft);
+    border-left: 4px solid var(--brand-orange);
+    padding: 12px 16px;
+    border-radius: 4px;
+    font-size: 13px;
+    color: var(--ink-soft);
+    margin-top: 10px;
+  }
+  .callout strong { color: var(--brand-navy); }
+
+  .conf-row { display: flex; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
+  .conf {
+    flex: 1;
+    min-width: 120px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+  .conf .label { font-weight: 700; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; }
+  .conf.high .label { color: var(--success); }
+  .conf.med  .label { color: var(--warn); }
+  .conf.low  .label { color: #b91c1c; }
+  .conf.miss .label { color: var(--muted); }
+  .conf.high { border-left: 3px solid var(--success); }
+  .conf.med  { border-left: 3px solid var(--brand-orange); }
+  .conf.low  { border-left: 3px solid #b91c1c; }
+  .conf.miss { border-left: 3px solid var(--muted); }
+
+  footer {
+    margin-top: 28px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 11.5px;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  @media print {
+    html, body { background: #fff; }
+    .page {
+      margin: 0;
+      box-shadow: none;
+      padding: 0;
+      border-radius: 0;
+      max-width: 100%;
+    }
+    .body-pad { padding: 20px 32px 28px 32px; }
+    .brand-bar {
+      padding: 14px 32px;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    header { padding-bottom: 10px; margin-bottom: 14px; }
+    h2 { margin: 14px 0 6px 0; }
+    .stage, .callout, th {
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .brand-bar { padding: 16px 20px; flex-direction: column; align-items: flex-start; gap: 10px; }
+    .brand-bar .tagline { text-align: left; }
+    .body-pad { padding: 22px 20px 30px 20px; }
+    .cols-2 { grid-template-columns: 1fr; gap: 12px; }
+    .pipeline { grid-template-columns: 1fr 1fr; }
+    .stage::after { display: none; }
+    header { flex-direction: column; align-items: flex-start; }
+    header .meta { text-align: left; }
+  }
+</style>
+</head>
+<body>
+  <main class="page">
+
+    <div class="brand-bar">
+      <div class="mark">
+        <span class="logo">DD</span>
+        <span class="wordmark">Digital Direction<span class="thin"> &nbsp;·&nbsp; Extraction Pipeline</span></span>
+      </div>
+      <div class="tagline">Telecom Expense Management that actually drives results</div>
+    </div>
+
+    <div class="body-pad">
+
+    <header>
+      <div>
+        <h1>Automated Inventory Extraction</h1>
+        <div class="sub">From raw carrier documents to a standardized 60-field service inventory — POC overview</div>
+      </div>
+      <div class="meta">
+        Prepared for Digital Direction<br />
+        April 2026
+      </div>
+    </header>
+
+    <p class="lead">
+      <strong>What it does.</strong> Takes a folder of mixed carrier documents — invoices, CSRs, contracts, service reports, emails — and produces a clean, standardized <strong>60-field service inventory</strong> that feeds directly into audit, optimization, and invoice workflows. Every value is traceable back to the source document, page, and section it came from.
+    </p>
+
+    <h2>POC Scope — run against your data</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th>Carriers</th>
+          <th>Accounts</th>
+          <th>Source Files</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>City of Dublin</td>
+          <td>AT&amp;T, Spectrum</td>
+          <td class="num">2</td>
+          <td>23 files — invoices, CSRs, service guide, contracts, email correspondence</td>
+        </tr>
+        <tr>
+          <td>NSS / Golub / Tops Markets</td>
+          <td>Windstream, Peerless</td>
+          <td class="num">2</td>
+          <td>62 files — multi-year contracts, amendments, CSRs, SD-WAN orders, reports</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="chips">
+      <span class="chip">Text PDFs</span>
+      <span class="chip">Scanned PDFs (OCR)</span>
+      <span class="chip">Excel (.xls / .xlsx)</span>
+      <span class="chip">CSV</span>
+      <span class="chip">Email (.eml / .msg)</span>
+      <span class="chip">472-page enterprise bills with ~90 sub-accounts</span>
+    </div>
+
+    <h2>The Pipeline — 5 stages, fully automated</h2>
+    <div class="pipeline">
+      <div class="stage"><span class="num">01</span><div class="name">Classify</div></div>
+      <div class="stage"><span class="num">02</span><div class="name">Parse</div></div>
+      <div class="stage"><span class="num">03</span><div class="name">Extract</div></div>
+      <div class="stage"><span class="num">04</span><div class="name">Merge</div></div>
+      <div class="stage"><span class="num">05</span><div class="name">Validate</div></div>
+    </div>
+    <div class="flow-ends">
+      <span>Upload</span>
+      <span>Review &amp; Feedback Loop</span>
+    </div>
+
+    <table>
+      <thead>
+        <tr><th style="width:90px">Stage</th><th>What happens</th><th>Why it matters</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>1. Classify</strong></td>
+          <td>Detects carrier, document type, and format variant via filename patterns, first-page text, and an LLM fallback. Extracts account numbers up front.</td>
+          <td>Same carrier ships multiple formats (AT&amp;T has box-format and section-marker CSRs). Routing decisions happen here so the right parser and prompt are used.</td>
+        </tr>
+        <tr>
+          <td><strong>2. Parse</strong></td>
+          <td>Three paths chosen per document: <strong>Docling</strong> for visual layouts, <strong>pdfplumber</strong> for mainframe CSRs, <strong>pandas</strong> for CSV/XLSX. Large bills are chunked at sub-account boundaries.</td>
+          <td>A 472-page Windstream bill becomes ~90 focused chunks instead of one unreadable blob. Two-column AT&amp;T layouts are read in the correct order.</td>
+        </tr>
+        <tr>
+          <td><strong>3. Extract</strong></td>
+          <td>Per-chunk LLM extraction (Gemini 2.5) into the 60-field schema, with carrier-specific domain knowledge (USOC codes, field codes, line types) injected from YAML configs. Runs in parallel.</td>
+          <td>A 472-page bill extracts in ~10–15 seconds, not 15 minutes. Only extracts what's explicit in the document — no hallucinated values. Every field carries a confidence score.</td>
+        </tr>
+        <tr>
+          <td><strong>4. Merge</strong></td>
+          <td>Cross-references every document for the same account: invoice for MRC/quantity, CSR for phone numbers and USOCs, contract for term/dates. Rule-based first, LLM (Claude) only for conflicts and gaps.</td>
+          <td>No single document has all 60 fields. This stage fills the gaps and resolves conflicts using priority rules you can audit.</td>
+        </tr>
+        <tr>
+          <td><strong>5. Validate</strong></td>
+          <td>Regex checks (account #, phone, zip), cross-field math (qty × unit cost = MRC), summary-total reconciliation, and per-field confidence scoring.</td>
+          <td>Catches extraction errors before they reach your reviewers.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="cols-2" style="margin-top:22px;">
+      <div>
+        <h2>Output — Every field is auditable</h2>
+        <p>Each row is tagged as a <strong>Service (S)</strong> summary or <strong>Component (C)</strong> line item, and every field carries:</p>
+        <ul class="clean">
+          <li><strong>Value</strong> — extracted from the document</li>
+          <li><strong>Source</strong> — document ID, page, section</li>
+          <li><strong>Confidence</strong> — routed for review accordingly</li>
+        </ul>
+        <div class="conf-row">
+          <div class="conf high"><div class="label">HIGH</div>auto-accept</div>
+          <div class="conf med"><div class="label">MEDIUM</div>pre-filled for review</div>
+          <div class="conf low"><div class="label">LOW</div>flagged as uncertain</div>
+          <div class="conf miss"><div class="label">MISSING</div>not in any source</div>
+        </div>
+      </div>
+
+      <div>
+        <h2>Human-in-the-Loop &amp; Self-Healing</h2>
+        <ul class="clean">
+          <li>Review UI shows the source document alongside extracted fields; reviewers correct LOW/MEDIUM, bulk-approve HIGH.</li>
+          <li>Corrections feed three loops: few-shot examples for future extractions, YAML domain-knowledge updates, adaptive confidence thresholds.</li>
+          <li>Unknown formats are <strong>flagged, never silently failed</strong> — a new carrier or format variant is resolved by a YAML config, not a code change.</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>Accuracy Targets — POC</h2>
+    <table>
+      <thead>
+        <tr><th>Field category</th><th>Target</th><th>Examples</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Structured</td><td class="num">&gt; 98%</td><td>Account #, phone #, amounts, dates</td></tr>
+        <tr><td>Semi-structured</td><td class="num">&gt; 90%</td><td>Address, billing name</td></tr>
+        <tr><td>Fuzzy</td><td class="num">&gt; 80%</td><td>Service type, component name</td></tr>
+        <tr><td>Contract</td><td class="num">&gt; 75%</td><td>Term, dates, renewal <em>(often absent from source)</em></td></tr>
+        <tr><td>Document classification</td><td class="num">&gt; 95%</td><td>Carrier + document type detection</td></tr>
+        <tr><td>New carrier onboarding</td><td class="num">&lt; 1 day</td><td>To first extraction; &lt; 1 week to 80%+ accuracy</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <strong>Why this holds up:</strong> Carrier logic lives in YAML, not code — adding a new carrier is a config change, not an engineering project. Every field is auditable to source. Partial document sets still produce useful output, with missing fields marked <strong>MISSING</strong> (not guessed) and filled in when new documents arrive. Rule-based merge before LLM merge keeps cross-reference cost 60–80% lower than a naive approach.
+    </div>
+
+    <footer>
+      <span>Digital Direction · Telecom Extraction POC</span>
+      <span>© 2026</span>
+    </footer>
+
+    </div><!-- /.body-pad -->
+  </main>
+</body>
+</html>

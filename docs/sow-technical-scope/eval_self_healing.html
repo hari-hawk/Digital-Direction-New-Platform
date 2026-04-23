@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Digital Direction - Evaluation & Self-Healing Architecture</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #f8f9fa; padding: 40px; }
+  .diagram-container { max-width: 1400px; margin: 0 auto; background: white; border-radius: 16px; padding: 48px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
+  .title { text-align: center; margin-bottom: 8px; font-size: 22px; font-weight: 700; color: #1a1a2e; }
+  .subtitle { text-align: center; margin-bottom: 44px; font-size: 13px; color: #666; }
+
+  /* Main layout: three vertical sections */
+  .main-layout { display: flex; flex-direction: column; gap: 32px; }
+
+  /* Section headers */
+  .section-header { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  .section-badge { padding: 5px 14px; border-radius: 6px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: white; }
+  .section-title { font-size: 16px; font-weight: 700; color: #1a1a2e; }
+
+  /* Cards */
+  .cards-row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .card { flex: 1; min-width: 200px; border-radius: 10px; padding: 18px 20px; border: 1.5px solid; }
+  .card-title { font-size: 13px; font-weight: 700; margin-bottom: 6px; }
+  .card-tech { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 3px; display: inline-block; margin-bottom: 8px; }
+  .card-body { font-size: 11px; color: #444; line-height: 1.6; }
+  .card-body li { margin-bottom: 3px; }
+  .card-metric { display: flex; align-items: baseline; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed; }
+  .card-metric .val { font-size: 18px; font-weight: 800; }
+  .card-metric .label { font-size: 10px; color: #666; }
+
+  /* Colors */
+  .bg-purple { background: #f3e5f5; } .bd-purple { border-color: #ce93d8; }
+  .t-purple { color: #7b1fa2; } .tech-purple { background: #e1bee7; color: #7b1fa2; }
+  .badge-purple { background: #7b1fa2; }
+  .metric-purple { border-color: #ce93d8; } .metric-purple .val { color: #7b1fa2; }
+
+  .bg-orange { background: #fff3e0; } .bd-orange { border-color: #ffcc80; }
+  .t-orange { color: #e65100; } .tech-orange { background: #ffe0b2; color: #e65100; }
+  .badge-orange { background: #e65100; }
+  .metric-orange { border-color: #ffcc80; } .metric-orange .val { color: #e65100; }
+
+  .bg-green { background: #e8f5e9; } .bd-green { border-color: #a5d6a7; }
+  .t-green { color: #2e7d32; } .tech-green { background: #c8e6c9; color: #2e7d32; }
+  .badge-green { background: #2e7d32; }
+  .metric-green { border-color: #a5d6a7; } .metric-green .val { color: #2e7d32; }
+
+  .bg-red { background: #fce4ec; } .bd-red { border-color: #ef9a9a; }
+  .t-red { color: #c62828; } .tech-red { background: #ffcdd2; color: #c62828; }
+
+  .bg-blue { background: #e3f2fd; } .bd-blue { border-color: #90caf9; }
+  .t-blue { color: #1565c0; } .tech-blue { background: #bbdefb; color: #1565c0; }
+  .badge-blue { background: #1565c0; }
+
+  /* Cycle diagram */
+  .cycle-container { display: flex; justify-content: center; margin: 20px 0; }
+  .cycle { position: relative; width: 600px; height: 380px; }
+  .cycle-node { position: absolute; border-radius: 10px; padding: 14px 18px; text-align: center; min-width: 160px; border: 2px solid; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+  .cycle-node .cn-title { font-size: 12px; font-weight: 700; }
+  .cycle-node .cn-detail { font-size: 10px; color: #555; margin-top: 4px; }
+
+  .cycle-arrow { position: absolute; font-size: 24px; color: #7b1fa2; font-weight: bold; }
+  .cycle-label { position: absolute; font-size: 10px; color: #7b1fa2; font-weight: 600; max-width: 100px; text-align: center; }
+
+  .cycle-center { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; }
+  .cycle-center .cc-title { font-size: 14px; font-weight: 800; color: #7b1fa2; }
+  .cycle-center .cc-sub { font-size: 10px; color: #666; margin-top: 4px; }
+
+  /* Threshold table */
+  .threshold-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 11px; }
+  .threshold-table th { background: #f5f5f5; padding: 8px 12px; text-align: left; font-weight: 600; color: #333; border-bottom: 2px solid #ddd; }
+  .threshold-table td { padding: 8px 12px; border-bottom: 1px solid #eee; }
+  .threshold-table tr:last-child td { border-bottom: none; }
+  .status-green { color: #2e7d32; font-weight: 600; }
+  .status-yellow { color: #f9a825; font-weight: 600; }
+  .status-red { color: #c62828; font-weight: 600; }
+
+  .divider { height: 1px; background: #e0e0e0; margin: 8px 0; }
+  .footer { text-align: center; margin-top: 30px; font-size: 11px; color: #999; }
+</style>
+</head>
+<body>
+<div class="diagram-container">
+  <div class="title">Evaluation Pipeline & Self-Healing Architecture</div>
+  <div class="subtitle">Continuous quality assurance with automated drift detection, fallback strategies, and feedback-driven improvement</div>
+
+  <div class="main-layout">
+
+    <!-- ============================================= -->
+    <!-- SECTION 1: CONTINUOUS EVALUATION PIPELINE -->
+    <!-- ============================================= -->
+    <div>
+      <div class="section-header">
+        <span class="section-badge badge-purple">A</span>
+        <span class="section-title">Continuous Evaluation Pipeline</span>
+      </div>
+
+      <div class="cards-row">
+        <div class="card bg-purple bd-purple">
+          <div class="card-title t-purple">Ground Truth Management</div>
+          <div class="card-tech tech-purple">Cloud Storage + BigQuery</div>
+          <div class="card-body">
+            <ul>
+              <li>Human-verified extraction outputs per carrier per document type</li>
+              <li>Minimum 50 ground truth docs per carrier</li>
+              <li>Versioned datasets - new GT versions per quarter</li>
+              <li>Tagged by difficulty: standard, edge-case, adversarial</li>
+            </ul>
+          </div>
+          <div class="card-metric metric-purple">
+            <span class="val">50+</span>
+            <span class="label">verified docs per carrier for baseline</span>
+          </div>
+        </div>
+
+        <div class="card bg-purple bd-purple">
+          <div class="card-title t-purple">Automated Accuracy Measurement</div>
+          <div class="card-tech tech-purple">Vertex AI Pipelines</div>
+          <div class="card-body">
+            <ul>
+              <li>Daily batch: run extraction on GT docs, compare field-by-field</li>
+              <li>Metrics: precision, recall, F1 per field per carrier</li>
+              <li>Character-level accuracy for text fields</li>
+              <li>Exact match for structured fields (dates, amounts)</li>
+              <li>Results stored in BigQuery with full lineage</li>
+            </ul>
+          </div>
+          <div class="card-metric metric-purple">
+            <span class="val">>95%</span>
+            <span class="label">field-level accuracy target</span>
+          </div>
+        </div>
+
+        <div class="card bg-purple bd-purple">
+          <div class="card-title t-purple">Regression Detection</div>
+          <div class="card-tech tech-purple">BigQuery + Cloud Run</div>
+          <div class="card-body">
+            <ul>
+              <li>Pre-promotion: new model version must pass accuracy gate vs current production baseline</li>
+              <li>No carrier can regress >1% on any field</li>
+              <li>Overall accuracy must meet or exceed current production</li>
+              <li>Automated blocking: promotion halted if regression detected</li>
+            </ul>
+          </div>
+          <div class="card-metric metric-purple">
+            <span class="val"><1%</span>
+            <span class="label">max allowed regression per field</span>
+          </div>
+        </div>
+
+        <div class="card bg-purple bd-purple">
+          <div class="card-title t-purple">Eval Dashboards</div>
+          <div class="card-tech tech-purple">Looker Studio</div>
+          <div class="card-body">
+            <ul>
+              <li>Accuracy heatmap: carriers x fields</li>
+              <li>Trend lines: accuracy over time per carrier</li>
+              <li>Model version comparison view</li>
+              <li>Human review volume and correction patterns</li>
+              <li>Drill-down to individual document failures</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================= -->
+    <!-- SECTION 2: SELF-HEALING MECHANISMS -->
+    <!-- ============================================= -->
+    <div>
+      <div class="section-header">
+        <span class="section-badge badge-orange">B</span>
+        <span class="section-title">Self-Healing Mechanisms</span>
+      </div>
+
+      <div class="cards-row">
+        <div class="card bg-orange bd-orange">
+          <div class="card-title t-orange">Confidence-Based Routing</div>
+          <div class="card-tech tech-orange">Cloud Run</div>
+          <div class="card-body">
+            Automatic fallback chain based on per-field confidence scores:
+          </div>
+          <table class="threshold-table" style="margin-top: 10px;">
+            <tr><th>Confidence</th><th>Action</th><th>Status</th></tr>
+            <tr><td>&ge; 0.9</td><td>Auto-accept, proceed to validation</td><td class="status-green">PASS</td></tr>
+            <tr><td>0.7 - 0.9</td><td>Retry with Document AI fallback</td><td class="status-yellow">FALLBACK</td></tr>
+            <tr><td>0.5 - 0.7</td><td>Route to human review queue</td><td class="status-yellow">REVIEW</td></tr>
+            <tr><td>< 0.5</td><td>Flag as extraction failure</td><td class="status-red">FAIL</td></tr>
+          </table>
+        </div>
+
+        <div class="card bg-orange bd-orange">
+          <div class="card-title t-orange">Drift Detection & Alerting</div>
+          <div class="card-tech tech-orange">BigQuery ML + Cloud Monitoring</div>
+          <div class="card-body">
+            <ul>
+              <li><strong>Statistical monitoring</strong>: track confidence score distributions per carrier using rolling 7-day windows</li>
+              <li><strong>Anomaly detection</strong>: alert when mean confidence drops >5% or std deviation increases >20%</li>
+              <li><strong>Field-level tracking</strong>: detect which specific fields are degrading</li>
+              <li><strong>Root cause signals</strong>: correlate drift with document format changes, new carrier templates, or model updates</li>
+              <li><strong>Alert escalation</strong>: Slack/email notification to ops team with specific carrier, field, and timeframe</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="card bg-orange bd-orange">
+          <div class="card-title t-orange">Auto-Retry & Strategy Switching</div>
+          <div class="card-tech tech-orange">Cloud Run + Pub/Sub</div>
+          <div class="card-body">
+            <ul>
+              <li><strong>Retry with alternate prompt</strong>: if primary prompt fails, try backup prompt template</li>
+              <li><strong>Retry with alternate model</strong>: Gemini Pro &rarr; Gemini Flash &rarr; Document AI</li>
+              <li><strong>Temperature adjustment</strong>: retry with lower temperature for more deterministic output</li>
+              <li><strong>Chunk strategy</strong>: if full-page extraction fails, try section-by-section extraction</li>
+              <li><strong>Max 3 retries</strong> before routing to human review</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="card bg-red bd-red">
+          <div class="card-title t-red">Circuit Breaker</div>
+          <div class="card-tech tech-red">Cloud Run + Cloud Monitoring</div>
+          <div class="card-body">
+            <ul>
+              <li><strong>Trigger</strong>: if a carrier's extraction accuracy drops below 80% over 24h window</li>
+              <li><strong>Action</strong>: pause automated processing for that carrier</li>
+              <li><strong>Notification</strong>: immediate alert to ops team with full diagnostic report</li>
+              <li><strong>Recovery</strong>: manual investigation, config update, re-run eval pipeline to confirm fix before resuming</li>
+              <li><strong>Prevents</strong>: bad data from propagating to downstream systems during quality incidents</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================= -->
+    <!-- SECTION 3: FEEDBACK LOOP & CONTINUOUS IMPROVEMENT -->
+    <!-- ============================================= -->
+    <div>
+      <div class="section-header">
+        <span class="section-badge badge-green">C</span>
+        <span class="section-title">Feedback Loop & Continuous Improvement Cycle</span>
+      </div>
+
+      <!-- Cycle Diagram -->
+      <div class="cycle-container">
+        <div class="cycle">
+          <!-- Center -->
+          <div class="cycle-center">
+            <div class="cc-title">CONTINUOUS</div>
+            <div class="cc-title">IMPROVEMENT</div>
+            <div class="cc-sub">Self-healing cycle</div>
+          </div>
+
+          <!-- Top: Extract -->
+          <div class="cycle-node bg-purple bd-purple" style="top: 0; left: 50%; transform: translateX(-50%);">
+            <div class="cn-title t-purple">EXTRACT</div>
+            <div class="cn-detail">AI processes carrier docs<br>with config-driven prompts</div>
+          </div>
+
+          <!-- Right: Evaluate -->
+          <div class="cycle-node bg-orange bd-orange" style="top: 35%; right: 0;">
+            <div class="cn-title t-orange">EVALUATE</div>
+            <div class="cn-detail">Compare outputs to<br>ground truth daily</div>
+          </div>
+
+          <!-- Bottom: Detect -->
+          <div class="cycle-node bg-red bd-red" style="bottom: 0; left: 50%; transform: translateX(-50%);">
+            <div class="cn-title t-red">DETECT & HEAL</div>
+            <div class="cn-detail">Drift detection triggers<br>auto-correction strategies</div>
+          </div>
+
+          <!-- Left: Improve -->
+          <div class="cycle-node bg-green bd-green" style="top: 35%; left: 0;">
+            <div class="cn-title t-green">IMPROVE</div>
+            <div class="cn-detail">Human corrections feed<br>back to refine prompts</div>
+          </div>
+
+          <!-- Arrows -->
+          <div class="cycle-arrow" style="top: 18%; right: 22%; transform: rotate(45deg);">&#10148;</div>
+          <div class="cycle-arrow" style="bottom: 18%; right: 22%; transform: rotate(135deg);">&#10148;</div>
+          <div class="cycle-arrow" style="bottom: 18%; left: 22%; transform: rotate(225deg);">&#10148;</div>
+          <div class="cycle-arrow" style="top: 18%; left: 22%; transform: rotate(315deg);">&#10148;</div>
+        </div>
+      </div>
+
+      <div class="cards-row">
+        <div class="card bg-green bd-green">
+          <div class="card-title t-green">Human Review Feedback</div>
+          <div class="card-tech tech-green">Cloud SQL + Cloud Run</div>
+          <div class="card-body">
+            <ul>
+              <li>Every human correction is captured with field-level diff</li>
+              <li>Corrections tagged by type: wrong value, missing field, wrong format, misclassified</li>
+              <li>Weekly aggregation: identify systematic patterns across corrections</li>
+              <li>Top correction patterns surface prompt improvement opportunities</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="card bg-green bd-green">
+          <div class="card-title t-green">Prompt Refinement Pipeline</div>
+          <div class="card-tech tech-green">Vertex AI Pipelines</div>
+          <div class="card-body">
+            <ul>
+              <li>Aggregate correction patterns into candidate prompt modifications</li>
+              <li>A/B test: route 10% of traffic through candidate prompt</li>
+              <li>Compare candidate vs production accuracy on same documents</li>
+              <li>Auto-promote if candidate accuracy &ge; production + 1% with no regressions</li>
+              <li>Prompt version history with full rollback capability</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="card bg-green bd-green">
+          <div class="card-title t-green">Active Learning</div>
+          <div class="card-tech tech-green">BigQuery + Vertex AI</div>
+          <div class="card-body">
+            <ul>
+              <li>Identify documents where model is most uncertain (confidence near decision boundary)</li>
+              <li>Prioritize these for human review to maximize learning per review</li>
+              <li>Expand ground truth with reviewed edge cases</li>
+              <li>Focus improvement effort where it matters most</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="card bg-blue bd-blue">
+          <div class="card-title t-blue">New Carrier Validation Gate</div>
+          <div class="card-tech tech-blue">Vertex AI Pipelines</div>
+          <div class="card-body">
+            <ul>
+              <li>Before any new carrier goes live, must pass eval gate:</li>
+              <li>&ge; 95% accuracy on 50+ test documents</li>
+              <li>All required fields extracted with &ge; 0.9 confidence</li>
+              <li>Validation rules passing at &ge; 98%</li>
+              <li>Automated report generated for go/no-go decision</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================= -->
+    <!-- SECTION 4: MLOps -->
+    <!-- ============================================= -->
+    <div>
+      <div class="section-header">
+        <span class="section-badge badge-blue">D</span>
+        <span class="section-title">MLOps & Model Lifecycle Management</span>
+      </div>
+
+      <div class="cards-row">
+        <div class="card bg-blue bd-blue">
+          <div class="card-title t-blue">Model Versioning</div>
+          <div class="card-tech tech-blue">Vertex AI Model Registry</div>
+          <div class="card-body">
+            <ul>
+              <li>Every model version tagged with: accuracy metrics, training data version, prompt version</li>
+              <li>Rollback to previous version within 15 minutes</li>
+              <li>Immutable audit log of all model deployments</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="card bg-blue bd-blue">
+          <div class="card-title t-blue">A/B Testing Framework</div>
+          <div class="card-tech tech-blue">Cloud Run + BigQuery</div>
+          <div class="card-body">
+            <ul>
+              <li>Route configurable % of traffic through candidate model/prompt</li>
+              <li>Real-time accuracy comparison dashboard</li>
+              <li>Statistical significance testing before promotion</li>
+              <li>Automatic rollback if candidate underperforms</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="card bg-blue bd-blue">
+          <div class="card-title t-blue">Retraining Triggers</div>
+          <div class="card-tech tech-blue">Vertex AI Pipelines</div>
+          <div class="card-body">
+            <ul>
+              <li>Trigger 1: accuracy drift exceeds threshold for 3 consecutive days</li>
+              <li>Trigger 2: new ground truth batch added (quarterly minimum)</li>
+              <li>Trigger 3: new carrier onboarded (expand training coverage)</li>
+              <li>Trigger 4: manual trigger by ops team for targeted improvement</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="card bg-blue bd-blue">
+          <div class="card-title t-blue">Prompt Management</div>
+          <div class="card-tech tech-blue">Cloud SQL + Cloud Run</div>
+          <div class="card-body">
+            <ul>
+              <li>Version-controlled prompt templates per carrier per doc type</li>
+              <li>Track which prompt version produces which accuracy per carrier</li>
+              <li>Prompt changelog with rationale for each modification</li>
+              <li>Carrier-specific prompt inheritance: base template + carrier overrides</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="footer">Digital Direction - Evaluation & Self-Healing Architecture | Techjays, INC | Google Cloud Platform | April 2026</div>
+</div>
+</body>
+</html>

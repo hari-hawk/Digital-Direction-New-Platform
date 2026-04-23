@@ -1,0 +1,18 @@
+# Peerless Network — eval configuration overrides
+#
+# Peerless is a SIP trunk provider. Their invoices and portal exports contain
+# aggregate service charges per-account, not per-location. The golden data
+# analyst added per-location breakdowns and address conventions that don't
+# exist in the source documents.
+
+field_extractability:
+  analyst_judgment:
+    # Golden uses "Service Not Address Specific" for all Peerless address fields.
+    # This is an analyst convention — Peerless invoices and portal exports do not
+    # contain service addresses because SIP trunks are not location-specific.
+    - service_address_1
+    - service_address_2
+    - city
+    - state
+    - zip
+    - country

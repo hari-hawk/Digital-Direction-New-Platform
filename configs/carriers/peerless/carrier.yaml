@@ -1,0 +1,137 @@
+name: "Peerless Network"
+aliases: ["Peerless", "peerless", "Peerless Network", "Infobip", "Peerless Portal", "The Peerless Portal"]
+
+filename_patterns:
+  invoice:
+    - pattern: "Peerless.*BILL"
+      confidence: 0.95
+  contract:
+    - pattern: "signed_quote"
+      confidence: 0.90
+    # Client-specific account prefixes are learned via known_accounts DB,
+    # not hardcoded here. Contracts are classified via first-page text ("Infobip", "Peerless").
+  did_list:
+    - pattern: "DIDs"
+      confidence: 0.85
+  subscription:
+    - pattern: "subscriptions_export"
+      confidence: 0.90
+
+account_number_patterns:
+  - pattern: "([A-Z]{3,}\\d{3,})"
+    format_desc: "Alphanumeric prefix + digits (customer-specific prefix)"
+    example: "ACCTNAME1234"
+  # Peerless uses customer-name-prefixed account IDs. The prefix varies per client.
+  # Specific prefixes are learned and stored in known_accounts DB table.
+
+first_page_signals:
+  required_any:
+    - "Peerless"
+    - "Infobip"
+    - "Peerless Portal"
+  doc_type_markers:
+    invoice:
+      - "BILL"
+      - "Amount Due"
+    contract:
+      - "SERVICE TERMS"
+      - "AGREEMENT"
+      - "Quote"
+    did_list:
+      - "DID"
+      - "Destination Type"
+    subscription:
+      - "Service Name"
+      - "MRC"
+      - "Effective"
+
+merge_rules:
+  account_normalization:
+    char_class: "alphanumeric"
+  phone_normalization:
+    pad_short_phones: false
+  doc_type_roles:
+    invoice: primary
+    contract: enrichment
+    did_list: enrichment
+    subscription: primary
+  # Invoice and subscription use incompatible sub-account schemes:
+  # - Invoice: no sub-accounts (or location names like "ACME Corp 720")
+  # - Subscription: composite IDs like "monarch_ACCTID123_BASIC"
+  # With sub_account_in_merge_key=false, all rows group by account only.
+  # Service identity matching (_service_identity_match) pairs rows within the group.
+  sub_account_in_merge_key: false
+  account_equivalence_fields:
+    - carrier_account_number
+    - master_account
+  # Invoice wins component_or_feature_name for Peerless: the golden output format
+  # uses the invoice's component base name + invoice quantity in the Qty suffix.
+  # Default would have subscription (8) beat invoice (7), which gives subscription
+  # names with subscription quantities that don't match the billed amounts.
+  field_priority_overrides:
+    component_or_feature_name:
+      invoice: 9
+
+# ── Pre-merge normalization (applied BEFORE merge keys are computed) ──
+# Fixes scanned invoice OCR that fails to capture the account number from the
+# document body. The account ID is in Peerless filenames but OCR often misses
+# it — many invoice rows have empty carrier_account_number.
+# Location names (e.g., "Store Name 720") get moved to sub_account_number_1.
+pre_merge_normalization:
+  account_from_filename:
+    # Generic pattern: uppercase alphanumeric account ID with trailing digits.
+    # Matches any Peerless account format (letters + digits, e.g., "ACCTID5597").
+    pattern: "([A-Z][A-Z0-9]+\\d{3,})"
+  location_to_sub_account:
+    # Matches location-style names: capitalized words followed by a number
+    # (e.g., "Store Name 720", "Location 001"). These are sub-account identifiers,
+    # not carrier account numbers.
+    pattern: "^[A-Z][a-zA-Z]+(?:\\s[A-Z][a-zA-Z]+)*\\s+\\d"
+
+# ── Post-extraction normalizations (applied in merger._apply_field_normalization) ──
+
+# Service type inference from component_or_feature_name patterns.
+# Source: Peerless invoice line items and portal subscription categories.
+# Normalize LLM extraction variants to standard abbreviations.
+# The Gemini extraction often returns "SIP Trunking" but the standard
+# industry abbreviation used in inventory files is "SIP Trunk".
+service_type_normalization:
+  "SIP Trunking": "SIP Trunk"
+
+service_type_inference:
+  "DID": "DID"
+  "Channel Fee": "SIP Trunk"
+  "Voice.*MOU": "Usage"
+  "Equipment Lease": "SIP Trunk"
+  "ESSENTIALS Seat": "SIP Trunk"
+  "TAX|SURCHARGE|SERVICE FUND|RECOVERY CHARGE": "Account Level"
+
+# Row type (service_or_component) inference from charge_type.
+# Source: Golden template spec defines S=service MRC, U=usage, T\S\OCC=taxes/surcharges.
+row_type_from_charge_type:
+  "MRC": "S"
+  "Usage": "U"
+  "Tax": "T\\S\\OCC"
+  "Taxes": "T\\S\\OCC"
+  "Surcharge": "T\\S\\OCC"
+
+# Charge type normalization — align minor variations.
+charge_type_normalization:
+  "Tax": "Taxes"
+
+# Billing name placeholder values to clear (so account propagation fills them).
+# Subscription CSV uses "--" and "Default" as placeholders when the real billing name
+# isn't in that row. Clearing these lets the merger propagate "Tops Markets, LLC"
+# from invoice rows that do have it.
+billing_name_placeholders:
+  - "--"
+  - "Default"
+  - "RemoteWorker"
+
+# Derive cost_per_unit from MRC and quantity when both are present.
+# Peerless source docs don't have a separate cost_per_unit field, but the
+# golden expects it computed as MRC / quantity.
+derive_cost_per_unit: true
+
+# known_identifiers are NOT stored here — they are client-specific.
+# Client-to-carrier mappings are learned dynamically and stored in the known_accounts DB table.

@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Digital Direction - Extraction Pipeline Flow</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #f8f9fa; padding: 40px; }
+  .diagram-container { max-width: 1300px; margin: 0 auto; background: white; border-radius: 16px; padding: 48px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
+  .title { text-align: center; margin-bottom: 8px; font-size: 22px; font-weight: 700; color: #1a1a2e; }
+  .subtitle { text-align: center; margin-bottom: 40px; font-size: 13px; color: #666; }
+
+  .flow { display: flex; flex-direction: column; gap: 0; align-items: center; }
+
+  .step { display: flex; align-items: stretch; gap: 16px; width: 100%; max-width: 1100px; }
+  .step-number { width: 48px; min-width: 48px; display: flex; flex-direction: column; align-items: center; }
+  .step-num-circle { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; color: white; flex-shrink: 0; }
+  .step-line { flex: 1; width: 2px; margin: 0 auto; }
+
+  .step-content { flex: 1; border-radius: 10px; padding: 18px 22px; margin-bottom: 0; }
+  .step-title { font-size: 14px; font-weight: 700; margin-bottom: 6px; }
+  .step-tech { font-size: 11px; padding: 2px 8px; border-radius: 4px; display: inline-block; margin-bottom: 8px; font-weight: 600; }
+  .step-detail { font-size: 12px; color: #444; line-height: 1.6; }
+  .step-detail ul { margin-left: 16px; }
+
+  .arrow-row { display: flex; justify-content: center; padding: 6px 0; }
+  .arrow-down { color: #999; font-size: 20px; }
+
+  /* Decision diamond */
+  .decision-row { display: flex; align-items: center; justify-content: center; gap: 20px; width: 100%; max-width: 1100px; }
+  .decision { background: #fff8e1; border: 2px solid #f9a825; border-radius: 10px; padding: 14px 24px; text-align: center; transform: rotate(0deg); }
+  .decision .d-label { font-size: 13px; font-weight: 700; color: #f57f17; }
+  .decision .d-detail { font-size: 11px; color: #666; margin-top: 4px; }
+  .branch { display: flex; gap: 16px; flex: 1; }
+  .branch-box { flex: 1; border-radius: 10px; padding: 14px 18px; text-align: center; }
+  .branch-label { font-size: 11px; font-weight: 700; margin-bottom: 4px; }
+  .branch-detail { font-size: 10px; color: #555; }
+
+  .branch-arrow { font-size: 14px; color: #999; display: flex; align-items: center; }
+
+  /* Colors */
+  .c-green { background: #e8f5e9; } .c-green .step-title { color: #2e7d32; }
+  .c-green .step-tech { background: #c8e6c9; color: #2e7d32; }
+  .c-green .step-num-circle { background: #2e7d32; } .c-green .step-line { background: #a5d6a7; }
+
+  .c-blue { background: #e3f2fd; } .c-blue .step-title { color: #1565c0; }
+  .c-blue .step-tech { background: #bbdefb; color: #1565c0; }
+  .c-blue .step-num-circle { background: #1565c0; } .c-blue .step-line { background: #90caf9; }
+
+  .c-purple { background: #f3e5f5; } .c-purple .step-title { color: #7b1fa2; }
+  .c-purple .step-tech { background: #e1bee7; color: #7b1fa2; }
+  .c-purple .step-num-circle { background: #7b1fa2; } .c-purple .step-line { background: #ce93d8; }
+
+  .c-orange { background: #fff3e0; } .c-orange .step-title { color: #e65100; }
+  .c-orange .step-tech { background: #ffe0b2; color: #e65100; }
+  .c-orange .step-num-circle { background: #e65100; } .c-orange .step-line { background: #ffcc80; }
+
+  .c-teal { background: #e0f2f1; } .c-teal .step-title { color: #00695c; }
+  .c-teal .step-tech { background: #b2dfdb; color: #00695c; }
+  .c-teal .step-num-circle { background: #00695c; } .c-teal .step-line { background: #80cbc4; }
+
+  .c-red { background: #fce4ec; } .c-red .step-title { color: #c62828; }
+  .c-red .step-tech { background: #ffcdd2; color: #c62828; }
+  .c-red .step-num-circle { background: #c62828; } .c-red .step-line { background: #ef9a9a; }
+
+  .b-high { background: #e8f5e9; border: 1.5px solid #a5d6a7; }
+  .b-high .branch-label { color: #2e7d32; }
+  .b-med { background: #fff3e0; border: 1.5px solid #ffcc80; }
+  .b-med .branch-label { color: #e65100; }
+  .b-low { background: #fce4ec; border: 1.5px solid #ef9a9a; }
+  .b-low .branch-label { color: #c62828; }
+
+  .feedback-loop { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 10px 0; }
+  .feedback-arrow { width: 80px; height: 40px; border: 2px dashed #7b1fa2; border-top: none; border-right: none; border-radius: 0 0 0 20px; position: relative; }
+  .feedback-text { font-size: 11px; color: #7b1fa2; font-weight: 600; font-style: italic; }
+
+  .footer { text-align: center; margin-top: 30px; font-size: 11px; color: #999; }
+</style>
+</head>
+<body>
+<div class="diagram-container">
+  <div class="title">Document Extraction Pipeline - Data Flow</div>
+  <div class="subtitle">End-to-end flow from carrier document ingestion to validated structured output</div>
+
+  <div class="flow">
+
+    <!-- Step 1: Document Ingestion -->
+    <div class="step">
+      <div class="step-number c-green">
+        <div class="step-num-circle">1</div>
+        <div class="step-line" style="height: 80px;"></div>
+      </div>
+      <div class="step-content c-green">
+        <div class="step-title">Document Ingestion</div>
+        <div class="step-tech">Cloud Run + Cloud Storage + Pub/Sub</div>
+        <div class="step-detail">
+          <ul>
+            <li>Document received via API upload, email webhook, or scheduled portal pull</li>
+            <li>Stored in Cloud Storage with carrier-partitioned bucket structure</li>
+            <li>Processing event published to Pub/Sub queue</li>
+            <li>Metadata record created in Cloud SQL (carrier_id, doc_type_hint, source, timestamp)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-row"><span class="arrow-down">&#9660;</span></div>
+
+    <!-- Step 2: Classification -->
+    <div class="step">
+      <div class="step-number c-blue">
+        <div class="step-num-circle">2</div>
+        <div class="step-line" style="height: 80px;"></div>
+      </div>
+      <div class="step-content c-blue">
+        <div class="step-title">Document Classification</div>
+        <div class="step-tech">Vertex AI (Gemini) - Multi-Modal</div>
+        <div class="step-detail">
+          <ul>
+            <li>Gemini analyzes document visually + text content to classify type</li>
+            <li>Categories: Invoice, CSR Record, Contract, Portal Export, Operational Report</li>
+            <li>Classification confidence score assigned (0.0 - 1.0)</li>
+            <li>If confidence < 0.8: flagged for human review of classification</li>
+            <li>Carrier identification: match to known carrier profile in config store</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-row"><span class="arrow-down">&#9660;</span></div>
+
+    <!-- Step 3: Config Lookup -->
+    <div class="step">
+      <div class="step-number c-teal">
+        <div class="step-num-circle">3</div>
+        <div class="step-line" style="height: 60px;"></div>
+      </div>
+      <div class="step-content c-teal">
+        <div class="step-title">Carrier Config Lookup</div>
+        <div class="step-tech">Cloud SQL (PostgreSQL)</div>
+        <div class="step-detail">
+          <ul>
+            <li>Load carrier-specific extraction template (field list, expected positions, formats)</li>
+            <li>Load validation rules (required fields, value ranges, cross-field checks)</li>
+            <li>Load prompt template for this carrier + document type combination</li>
+            <li>Load confidence thresholds (auto-accept, review, reject boundaries)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-row"><span class="arrow-down">&#9660;</span></div>
+
+    <!-- Step 4: Primary Extraction -->
+    <div class="step">
+      <div class="step-number c-purple">
+        <div class="step-num-circle">4</div>
+        <div class="step-line" style="height: 80px;"></div>
+      </div>
+      <div class="step-content c-purple">
+        <div class="step-title">Primary Extraction (Gemini)</div>
+        <div class="step-tech">Vertex AI (Gemini) - Config-Driven Prompts</div>
+        <div class="step-detail">
+          <ul>
+            <li>Carrier-specific prompt template populated with field mappings from config</li>
+            <li>Gemini extracts all target fields from document</li>
+            <li>Per-field confidence scores generated based on extraction quality signals</li>
+            <li>Structured JSON output with field values, confidence scores, and source locations</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-row"><span class="arrow-down">&#9660;</span></div>
+
+    <!-- Decision: Confidence Check -->
+    <div class="decision-row">
+      <div class="decision">
+        <div class="d-label">CONFIDENCE CHECK</div>
+        <div class="d-detail">Per-field confidence vs carrier thresholds</div>
+      </div>
+    </div>
+
+    <div style="display: flex; gap: 16px; width: 100%; max-width: 1100px; padding: 12px 64px;">
+      <div class="branch-box b-high" style="flex:1;">
+        <div class="branch-label">HIGH CONFIDENCE (&ge; 0.9)</div>
+        <div class="branch-detail">Auto-accepted. Proceed to validation.</div>
+      </div>
+      <div class="branch-box b-med" style="flex:1;">
+        <div class="branch-label">MEDIUM (0.7 - 0.9)</div>
+        <div class="branch-detail">Try Document AI fallback extraction. Re-score. If still medium: queue for human review.</div>
+      </div>
+      <div class="branch-box b-low" style="flex:1;">
+        <div class="branch-label">LOW CONFIDENCE (< 0.7)</div>
+        <div class="branch-detail">Route to human review queue immediately. Flag specific low-confidence fields.</div>
+      </div>
+    </div>
+
+    <div class="arrow-row"><span class="arrow-down">&#9660; all paths converge &#9660;</span></div>
+
+    <!-- Step 5: Validation -->
+    <div class="step">
+      <div class="step-number c-orange">
+        <div class="step-num-circle">5</div>
+        <div class="step-line" style="height: 80px;"></div>
+      </div>
+      <div class="step-content c-orange">
+        <div class="step-title">Rule-Based Validation</div>
+        <div class="step-tech">Cloud Run - Config-Driven Rules</div>
+        <div class="step-detail">
+          <ul>
+            <li>Required field presence check (carrier-specific required fields from config)</li>
+            <li>Format validation (dates, currencies, account numbers, phone numbers)</li>
+            <li>Cross-field consistency checks (e.g., line items sum to total, dates are chronological)</li>
+            <li>Business rule validation (e.g., rate within expected range for carrier/service type)</li>
+            <li>Validation failures: auto-flag for review with specific failure reason</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-row"><span class="arrow-down">&#9660;</span></div>
+
+    <!-- Step 6: Output -->
+    <div class="step">
+      <div class="step-number c-green">
+        <div class="step-num-circle">6</div>
+        <div class="step-line" style="height: 60px;"></div>
+      </div>
+      <div class="step-content c-green">
+        <div class="step-title">Validated Output Delivery</div>
+        <div class="step-tech">BigQuery + Cloud Run API + Pub/Sub</div>
+        <div class="step-detail">
+          <ul>
+            <li>Validated extraction results written to BigQuery (carrier-normalized schema)</li>
+            <li>Structured output available via API (JSON) and export (CSV)</li>
+            <li>Processing complete notification via Pub/Sub to downstream systems</li>
+            <li>Full audit trail: document ID, extraction method, model version, confidence scores, validation results, reviewer (if any)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow-row"><span class="arrow-down">&#9660;</span></div>
+
+    <!-- Step 7: Eval -->
+    <div class="step">
+      <div class="step-number c-red">
+        <div class="step-num-circle">7</div>
+      </div>
+      <div class="step-content c-red">
+        <div class="step-title">Evaluation & Feedback Loop</div>
+        <div class="step-tech">Vertex AI Pipelines + BigQuery</div>
+        <div class="step-detail">
+          <ul>
+            <li>Daily automated comparison: extraction outputs vs ground truth datasets</li>
+            <li>Per-carrier, per-document-type, per-field accuracy metrics computed and stored</li>
+            <li>Human review corrections automatically tagged and aggregated for model improvement</li>
+            <li>Drift detection: confidence distribution shifts trigger investigation and auto-adjustment</li>
+            <li style="color: #7b1fa2; font-weight: 600;">&#8593; Corrections feed back to Step 4 (prompt refinement) and Step 3 (config updates)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="footer">Digital Direction - Document Extraction Pipeline Flow | Techjays, INC | Google Cloud Platform | April 2026</div>
+</div>
+</body>
+</html>

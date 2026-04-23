@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Digital Direction — Pipeline Comparison (v3 vs. New Platform)</title>
+<style>
+  :root {
+    --brand-navy:      #0D205B;
+    --brand-navy-2:    #163567;
+    --brand-navy-deep: #04113C;
+    --brand-orange:    #F08F28;
+    --brand-lime:      #C4D82D;
+    --brand-sky:       #A6CAE0;
+    --brand-mist:      #DCE2EE;
+    --brand-tint:      #EAEEF5;
+    --brand-paper:     #F3F5F9;
+
+    --ink:       var(--brand-navy-deep);
+    --ink-soft:  #434446;
+    --muted:     #7A99AC;
+    --line:      #DCE2EE;
+    --bg:        #ffffff;
+    --bg-soft:   var(--brand-paper);
+    --accent:    var(--brand-navy);
+    --accent-soft: var(--brand-tint);
+    --success:   #2F7D57;
+    --warn:      var(--brand-orange);
+    --danger:    #b91c1c;
+    --chip-bg:   var(--brand-mist);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--brand-paper);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 1040px;
+    margin: 32px auto;
+    background: var(--bg);
+    padding: 0;
+    border-radius: 12px;
+    box-shadow: 0 10px 40px rgba(13, 32, 91, 0.12);
+    overflow: hidden;
+  }
+
+  .brand-bar {
+    background: linear-gradient(90deg, var(--brand-navy) 0%, var(--brand-navy-2) 100%);
+    color: #fff;
+    padding: 22px 52px 20px 52px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 24px;
+    border-bottom: 3px solid var(--brand-orange);
+  }
+  .brand-bar .mark { display: flex; align-items: center; gap: 12px; }
+  .brand-bar .mark .logo {
+    width: 34px; height: 34px; border-radius: 6px;
+    background: #fff; color: var(--brand-navy);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 15px; letter-spacing: -0.02em;
+  }
+  .brand-bar .wordmark { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; }
+  .brand-bar .wordmark .thin { font-weight: 400; color: var(--brand-sky); }
+  .brand-bar .tagline { font-size: 12px; color: var(--brand-sky); letter-spacing: 0.02em; text-align: right; }
+
+  .body-pad { padding: 32px 52px 44px 52px; }
+
+  header {
+    border-bottom: 2px solid var(--brand-navy);
+    padding-bottom: 18px;
+    margin-bottom: 22px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 24px;
+  }
+  header h1 {
+    font-size: 26px; line-height: 1.2; margin: 0 0 4px 0;
+    font-weight: 700; letter-spacing: -0.01em; color: var(--brand-navy);
+  }
+  header .sub { color: var(--ink-soft); font-size: 13px; }
+  header .meta { text-align: right; color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+  h2 {
+    font-size: 13px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--accent); margin: 26px 0 10px 0;
+  }
+
+  p { margin: 0 0 10px 0; color: var(--ink-soft); }
+
+  .lead {
+    font-size: 15px; color: var(--ink); margin-bottom: 6px;
+  }
+  .lead strong { color: var(--ink); }
+
+  table {
+    width: 100%; border-collapse: collapse;
+    margin: 6px 0 0 0; font-size: 13px;
+  }
+  th, td {
+    text-align: left; padding: 9px 10px;
+    border-bottom: 1px solid var(--line); vertical-align: top;
+  }
+  th {
+    background: var(--bg-soft); color: var(--ink);
+    font-weight: 600; font-size: 12px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  td.num { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 600; }
+  td.tag { font-size: 12px; color: var(--ink); font-weight: 600; }
+  td.prev { background: #fafbfd; }
+
+  .legend { display: flex; gap: 12px; margin: 10px 0 -2px 0; flex-wrap: wrap; font-size: 12px; }
+  .legend .dot {
+    display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+    margin-right: 6px; vertical-align: middle;
+  }
+  .legend .prev  { background: #a6b0c8; }
+  .legend .new   { background: var(--brand-orange); }
+
+  /* Column headers for previous/new tables */
+  th.col-prev { background: #EEF1F7; color: var(--brand-navy-2); }
+  th.col-new  { background: #FFF3E4; color: #8A4A0A; }
+
+  .cols-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  .cols-2.compare { gap: 0; }
+  .cols-2.compare > div {
+    border-radius: 8px; padding: 14px 16px;
+  }
+  .cols-2.compare .prev-col {
+    background: #EEF1F7;
+    border: 1px solid #D7DEEB;
+    margin-right: -1px;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  .cols-2.compare .new-col {
+    background: #FFF7EC;
+    border: 1px solid #F3D6AF;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
+  .cols-2.compare h3 {
+    margin: 0 0 8px 0; font-size: 12px;
+    letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .cols-2.compare .prev-col h3 { color: var(--brand-navy-2); }
+  .cols-2.compare .new-col h3  { color: #8A4A0A; }
+
+  ul.clean {
+    margin: 4px 0 0 0; padding-left: 18px;
+  }
+  ul.clean li { margin-bottom: 4px; color: var(--ink-soft); }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .chip {
+    background: var(--chip-bg); color: var(--ink-soft);
+    padding: 3px 8px; border-radius: 999px; font-size: 11.5px;
+  }
+
+  .callout {
+    background: var(--bg-soft);
+    border-left: 4px solid var(--brand-orange);
+    padding: 12px 16px; border-radius: 4px;
+    font-size: 13px; color: var(--ink-soft); margin-top: 10px;
+  }
+  .callout strong { color: var(--brand-navy); }
+
+  /* Pipeline rows (one per version) */
+  .pipe-row {
+    display: grid;
+    grid-template-columns: 90px repeat(5, 1fr);
+    gap: 6px;
+    align-items: stretch;
+    margin: 4px 0;
+  }
+  .pipe-label {
+    display: flex; align-items: center;
+    font-size: 11px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted);
+    padding-right: 6px;
+  }
+  .pipe-label.prev { color: #6A7898; }
+  .pipe-label.new  { color: #8A4A0A; }
+  .stage {
+    position: relative;
+    background: var(--accent-soft);
+    border: 1px solid var(--brand-mist);
+    border-radius: 8px;
+    padding: 8px 10px;
+    text-align: center;
+    min-height: 52px;
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .stage.prev { background: #EEF1F7; border-color: #D7DEEB; }
+  .stage.new  { background: #FFF3E4; border-color: #F3D6AF; }
+  .stage .num {
+    display: inline-block; font-size: 10.5px;
+    color: var(--brand-orange); font-weight: 700; letter-spacing: 0.08em;
+  }
+  .stage.prev .num { color: #6A7898; }
+  .stage .name { font-size: 12.5px; font-weight: 700; color: var(--ink); margin-top: 2px; }
+  .stage .hint { font-size: 10.5px; color: var(--ink-soft); margin-top: 2px; }
+
+  .delta-pill {
+    display: inline-block;
+    background: #FFF3E4; color: #8A4A0A;
+    border: 1px solid #F3D6AF;
+    font-size: 11px; font-weight: 700;
+    padding: 2px 8px; border-radius: 999px;
+    letter-spacing: 0.03em;
+  }
+
+  .kept {
+    background: #E9F3EC; color: #1E5A3B;
+    border: 1px solid #C8E1D1;
+    padding: 2px 8px; border-radius: 999px;
+    font-size: 11px; font-weight: 700;
+    display: inline-block;
+  }
+
+  footer {
+    margin-top: 28px; padding-top: 14px;
+    border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 11.5px;
+    display: flex; justify-content: space-between;
+  }
+
+  code {
+    background: #EEF1F7;
+    color: var(--brand-navy);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+
+  @media print {
+    html, body { background: #fff; }
+    .page {
+      margin: 0; box-shadow: none; padding: 0;
+      border-radius: 0; max-width: 100%;
+    }
+    .body-pad { padding: 20px 32px 28px 32px; }
+    .brand-bar {
+      padding: 14px 32px;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    header { padding-bottom: 10px; margin-bottom: 14px; }
+    h2 { margin: 14px 0 6px 0; }
+    .stage, .callout, th, .delta-pill, .kept {
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+  }
+
+  @media (max-width: 860px) {
+    .brand-bar { padding: 16px 20px; flex-direction: column; align-items: flex-start; gap: 10px; }
+    .brand-bar .tagline { text-align: left; }
+    .body-pad { padding: 22px 20px 30px 20px; }
+    .cols-2 { grid-template-columns: 1fr; gap: 12px; }
+    .cols-2.compare .prev-col, .cols-2.compare .new-col {
+      border-radius: 8px; margin: 0;
+    }
+    .pipe-row { grid-template-columns: 1fr 1fr; }
+    .pipe-label { display: none; }
+    header { flex-direction: column; align-items: flex-start; }
+    header .meta { text-align: left; }
+  }
+</style>
+</head>
+<body>
+  <main class="page">
+
+    <div class="brand-bar">
+      <div class="mark">
+        <span class="logo">DD</span>
+        <span class="wordmark">Digital Direction<span class="thin"> &nbsp;·&nbsp; Pipeline Comparison</span></span>
+      </div>
+      <div class="tagline">Previous Platform (v3) &nbsp;·&nbsp; New Extraction Platform</div>
+    </div>
+
+    <div class="body-pad">
+
+    <header>
+      <div>
+        <h1>Pipeline Comparison — v3 vs. New Platform</h1>
+        <div class="sub">What carries forward from the delivered POC, what has been rebuilt, and why</div>
+      </div>
+      <div class="meta">
+        Prepared for Digital Direction<br />
+        April 2026
+      </div>
+    </header>
+
+    <p class="lead">
+      <strong>Context.</strong> The <strong>previous platform (v3)</strong> validated the 60-field inventory approach on real client data across Windstream, Peerless, AT&amp;T, and Spectrum — hitting <strong>98.59%</strong> on the largest Windstream account and proving the extract-merge-QA workflow end-to-end. The <strong>new platform</strong> keeps the shape of that pipeline and its 60-field schema, but rebuilds the core extraction, merge, and storage layers so that <strong>new carriers onboard through configuration alone</strong>, scanned documents are handled natively, and every human correction improves future extractions.
+    </p>
+
+    <div class="callout">
+      <strong>In one line.</strong> v3 proved the workflow with hand-coded carrier logic.
+      The new platform generalises that workflow into a configuration-driven, LLM-first pipeline with a persistent audit trail and a self-healing feedback loop — so scaling to new carriers and document formats stops being an engineering project.
+    </div>
+
+    <!-- ============ AT A GLANCE ============ -->
+    <h2>At a glance</h2>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 22%">Dimension</th>
+          <th class="col-prev" style="width: 39%">Previous Platform (v3)</th>
+          <th class="col-new" style="width: 39%">New Platform</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="tag">Core approach</td>
+          <td class="prev">Deterministic Python parsers + merge engines <strong>hand-coded per carrier</strong>. LLM used only for optional file classification and OCR.</td>
+          <td><strong>LLM-first extraction</strong> (Gemini 2.5 Flash / Pro, adaptive) driven by carrier-specific prompts and YAML domain knowledge. Claude used narrowly for merge-conflict resolution.</td>
+        </tr>
+        <tr>
+          <td class="tag">New-carrier onboarding</td>
+          <td class="prev">YAML config <strong>plus</strong> per-carrier Python: parser modules (one per file type), a merge engine, a carrier plugin class, registration. Typically days of engineering per carrier.</td>
+          <td><strong>Configuration only</strong>: a carrier folder with <code>carrier.yaml</code>, <code>formats/*.yaml</code>, <code>prompts/*.md</code>, and <code>domain_knowledge/*.yaml</code>. Target: &lt;1 day to first extraction, no code change.</td>
+        </tr>
+        <tr>
+          <td class="tag">Scanned PDFs / OCR</td>
+          <td class="prev">Separate OCR code path (per-carrier and generic). Peerless coverage capped by OCR gaps (~50% of rows blocked in the POC).</td>
+          <td>Multimodal Gemini 2.5 Pro as a <strong>native branch of the main flow</strong>; no separate OCR subsystem. Scanned PDFs are chunked and extracted with the same prompts and schema.</td>
+        </tr>
+        <tr>
+          <td class="tag">Classification</td>
+          <td class="prev">File-name regex + directory patterns; optional LLM classifier with cached manifest.</td>
+          <td><strong>Three-stage</strong>: filename &rarr; first-page content signals &rarr; LLM fallback on disagreement. Post-extraction check re-classifies if extracted <code>carrier_name</code> contradicts the initial call.</td>
+        </tr>
+        <tr>
+          <td class="tag">Merge logic</td>
+          <td class="prev">Hand-written Python merge engine per carrier (~300–500 lines each), plus YAML source-priority chains.</td>
+          <td>Config-driven <strong>field priority matrix</strong> (carrier-overridable) for the common case; Claude invoked only where two high-confidence sources genuinely conflict.</td>
+        </tr>
+        <tr>
+          <td class="tag">QA / Validation</td>
+          <td class="prev">30 hard-coded QA rules (some fire incorrectly on Peerless by design).</td>
+          <td>Cross-field math + format checks + confidence scoring, plus a dedicated <strong>Compliance stage</strong> (rate-mismatch, expired contract, M2M inconsistency, term-date mismatch, no-contract).</td>
+        </tr>
+        <tr>
+          <td class="tag">Feedback loop</td>
+          <td class="prev">Corrections require a pipeline re-run; no persistent feedback back into extraction.</td>
+          <td>Human corrections persist and are <strong>injected as "known corrections" into future extraction prompts</strong>, alongside few-shot examples and domain-knowledge updates.</td>
+        </tr>
+        <tr>
+          <td class="tag">Persistence</td>
+          <td class="prev">SQLite as transient staging; Excel is the permanent record.</td>
+          <td><strong>PostgreSQL + pgvector</strong> as the system of record: uploads, documents, extraction runs, extracted rows, corrections, with soft-delete / retention.</td>
+        </tr>
+        <tr>
+          <td class="tag">Throughput</td>
+          <td class="prev">Per-account processing, primarily sequential within a run.</td>
+          <td>Section-level parallelism with up to <strong>200 concurrent Gemini calls</strong>; per-file extractions cached for crash-safe resume.</td>
+        </tr>
+        <tr>
+          <td class="tag">Frontend</td>
+          <td class="prev">React + Material-UI; live WebSocket status, filterable results table, Excel download.</td>
+          <td>Next.js + shadcn/ui; Dashboard, Upload, Results, Review, Analytics, Bin, Settings. Review page designed to show the source document beside extracted fields with confidence-based triage.</td>
+        </tr>
+        <tr>
+          <td class="tag">Output</td>
+          <td class="prev">Multi-sheet Excel as the deliverable; source attribution stays in Python and is not exposed in the workbook.</td>
+          <td>60-field rows stored with <strong>per-row <code>source_documents</code></strong>, <code>compliance_flags</code>, and per-field confidence. Excel export remains available; the audit trail lives in the database.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ============ PIPELINE SIDE BY SIDE ============ -->
+    <h2>Pipeline shape — side by side</h2>
+
+    <div class="pipe-row">
+      <div class="pipe-label prev">Previous</div>
+      <div class="stage prev">
+        <span class="num">01</span><div class="name">Discover</div>
+        <div class="hint">Regex / aliases</div>
+      </div>
+      <div class="stage prev">
+        <span class="num">02</span><div class="name">Parse</div>
+        <div class="hint">Per-carrier Python</div>
+      </div>
+      <div class="stage prev">
+        <span class="num">03</span><div class="name">Merge</div>
+        <div class="hint">Hand-coded engine</div>
+      </div>
+      <div class="stage prev">
+        <span class="num">04</span><div class="name">QA</div>
+        <div class="hint">30 rules</div>
+      </div>
+      <div class="stage prev">
+        <span class="num">05</span><div class="name">Export</div>
+        <div class="hint">Excel + SQLite</div>
+      </div>
+    </div>
+
+    <div class="pipe-row" style="margin-top: 8px;">
+      <div class="pipe-label new">New</div>
+      <div class="stage new">
+        <span class="num">01</span><div class="name">Classify</div>
+        <div class="hint">3-stage + re-check</div>
+      </div>
+      <div class="stage new">
+        <span class="num">02</span><div class="name">Parse</div>
+        <div class="hint">Docling · pdfplumber · pandas · multimodal</div>
+      </div>
+      <div class="stage new">
+        <span class="num">03</span><div class="name">Extract</div>
+        <div class="hint">Gemini 2.5 + prompts</div>
+      </div>
+      <div class="stage new">
+        <span class="num">04</span><div class="name">Merge</div>
+        <div class="hint">Priority matrix + Claude</div>
+      </div>
+      <div class="stage new">
+        <span class="num">05</span><div class="name">Validate + Comply</div>
+        <div class="hint">Math · format · compliance</div>
+      </div>
+    </div>
+
+    <p style="margin-top:12px;">
+      The <strong>shape</strong> is preserved so the workflow remains familiar: documents in, 60-field inventory out, reviewer confirms. What changed is <em>how each stage is implemented</em> and <em>where carrier-specific knowledge lives</em>.
+    </p>
+
+    <!-- ============ STAGE BY STAGE ============ -->
+    <h2>Stage by stage — what actually changed</h2>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 14%">Stage</th>
+          <th class="col-prev" style="width: 43%">Previous Platform (v3)</th>
+          <th class="col-new" style="width: 43%">New Platform</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="tag">Classify /<br/>Discover</td>
+          <td class="prev">
+            Directory scan with carrier YAML regexes and aliases (<code>invoices</code>, <code>reports</code>, <code>contracts</code>, <code>csrs</code>). Optional Gemini Flash classifier with a cached manifest for files that don't match patterns.
+          </td>
+          <td>
+            Three stages with an explicit agreement check:
+            <ul class="clean">
+              <li><strong>A.</strong> Filename patterns per doc type</li>
+              <li><strong>B.</strong> First-page text signals (carrier aliases + doc-type markers + format signatures)</li>
+              <li><strong>C.</strong> Gemini Flash JSON fallback only when A &ne; B</li>
+            </ul>
+            Adds a <strong>post-extraction validation</strong>: if &gt;60% of extracted rows point to a different carrier, the document is re-classified and re-extracted.
+          </td>
+        </tr>
+        <tr>
+          <td class="tag">Parse</td>
+          <td class="prev">
+            One module per carrier per file type — e.g. <code>src/parsers/windstream/{invoice,csr,mrc_report,carrier_report,contract,cams_report}.py</code>, plus Peerless/AT&amp;T/Spectrum equivalents. Separate OCR path under <code>src/parsers/ocr/</code>.
+          </td>
+          <td>
+            A single <code>parser.py</code> routes by suffix and format config to <strong>Docling</strong> (visual layouts), <strong>pdfplumber</strong> (mainframe CSRs), or <strong>pandas</strong> (CSV/XLSX), with native handling for <code>.msg</code>, <code>.eml</code>, and <code>.docx</code>.
+            <br/>Chunking is <strong>config-driven</strong>: boundary patterns (<em>ACTIVITY FOR ACCOUNT</em>, <em>Charges for</em>), section markers (<em>---LISTINGS---</em>), or N-pages-per-chunk. Scanned PDFs are page-grouped and sent to multimodal Gemini.
+          </td>
+        </tr>
+        <tr>
+          <td class="tag">Extract</td>
+          <td class="prev">
+            No LLM in the extraction path. Each parser emits typed dataclasses assembled by hand from regex, pdfplumber layout, and pandas. Extending to a new format means writing more Python.
+          </td>
+          <td>
+            Per-section LLM extraction into the 60-field schema with a <strong>layered prompt</strong>: system context, carrier-specific extraction prompt, domain knowledge (USOCs / field codes / service types), schema with sparse-object rule, few-shot examples, <strong>known corrections from past reviews</strong>, and spatial address blocks for PDFs.
+            <br/>Model is adaptive: Flash for known formats, Pro for new formats and unknown carriers, Pro-multimodal for scanned PDFs.
+          </td>
+        </tr>
+        <tr>
+          <td class="tag">Merge</td>
+          <td class="prev">
+            A separate merge engine per carrier (<code>src/merge/{windstream, peerless, att, spectrum, ...}.py</code>). Shared <code>source_resolver.py</code> applies YAML priority chains per field. S/C hierarchy logic is carrier-specific and lives in Python.
+          </td>
+          <td>
+            Rule-based tier first: normalise account numbers (optional check-digit trim), normalise phone numbers (optional padding), group by <code>account | sub_account | phone</code>, resolve each field against a <strong>priority matrix</strong> (MRC: invoice &gt; contract &gt; subscription &gt; CSR; phone: CSR &gt; DID-list &gt; invoice; and so on, with per-carrier overrides). Account-level fields propagate within the group.
+            <br/>Claude is invoked <strong>only</strong> for genuine cross-doc conflicts between two high-confidence sources.
+          </td>
+        </tr>
+        <tr>
+          <td class="tag">Validate</td>
+          <td class="prev">
+            30 QA rules implemented as Python functions in <code>src/rules/qa_checklist.py</code>, plus per-field confidence in <code>src/rules/confidence.py</code>. Some rules fire by design on Peerless flat-S output and need manual dismissal.
+          </td>
+          <td>
+            Cross-field math (<em>qty × unit cost ≈ MRC</em> within 2¢), format regexes (phone, zip), date logic (begin &lt; expiration, equal = M2M), required-field checks, and summary-total reconciliation (e.g. Windstream Location Summary). Confidence is assigned per field category (STRUCTURED / SEMI / FUZZY / CONTRACT).
+          </td>
+        </tr>
+        <tr>
+          <td class="tag">Compliance<br/><span class="delta-pill">new stage</span></td>
+          <td class="prev">—</td>
+          <td>
+            Five post-merge checks attached to each row as <code>compliance_flags</code>:
+            <ul class="clean">
+              <li><strong>rate_mismatch</strong> — invoice MRC vs. contract rate (&gt;10% error, &gt;1% warning)</li>
+              <li><strong>expired_contract</strong> — expiration &lt; today</li>
+              <li><strong>mtm_inconsistency</strong> — currently M2M but begin &ne; expiration</li>
+              <li><strong>term_date_mismatch</strong> — begin + term_months &ne; expiration</li>
+              <li><strong>no_contract</strong> — active billing but zero contract fields</li>
+            </ul>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ============ CARRIER ONBOARDING ============ -->
+    <h2>Adding a new carrier — then vs. now</h2>
+
+    <div class="cols-2 compare">
+      <div class="prev-col">
+        <h3>Previous Platform</h3>
+        <ol class="clean">
+          <li>Write <code>src/config/{carrier}.yaml</code> (directories, regexes, priorities)</li>
+          <li>Create <code>src/parsers/{carrier}/</code> — one module per file type</li>
+          <li>Create <code>src/merge/{carrier}.py</code> — merge engine with S/C logic</li>
+          <li>Create <code>src/carriers/{carrier}.py</code> — <code>CarrierPlugin</code> class</li>
+          <li>Register in <code>src/carriers/__init__.py</code></li>
+          <li>Add routing in <code>main.py</code> and gold accounts in <code>backend/config.py</code></li>
+        </ol>
+        <p style="margin-top: 8px;"><strong>Result:</strong> days of engineering, code review, and testing for each carrier or major format variant.</p>
+      </div>
+      <div class="new-col">
+        <h3>New Platform</h3>
+        <ol class="clean">
+          <li>Create <code>configs/carriers/{name}/carrier.yaml</code> — aliases, filename patterns, account patterns, first-page signals, merge rules</li>
+          <li>Add <code>formats/*.yaml</code> — one per format variant (signature, chunking, field rules, examples)</li>
+          <li>Add <code>prompts/*.md</code> — extraction prompts per document type</li>
+          <li>Populate <code>domain_knowledge/*.yaml</code> — USOC codes, field codes, service types (optional)</li>
+          <li>Restart the server — <code>ConfigStore</code> loads on startup</li>
+        </ol>
+        <p style="margin-top: 8px;"><strong>Result:</strong> no Python changes. Target of &lt;1 day to first extraction, &lt;1 week to 80%+ accuracy.</p>
+      </div>
+    </div>
+
+    <!-- ============ FEEDBACK / AUDIT ============ -->
+    <h2>Confidence, audit trail, and the feedback loop</h2>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 22%">Capability</th>
+          <th class="col-prev">Previous Platform (v3)</th>
+          <th class="col-new">New Platform</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="tag">Per-field confidence</td>
+          <td class="prev">Assigned by rule in <code>src/rules/confidence.py</code> (HIGH / MEDIUM / LOW buckets by field category). Lives in Python, not persisted alongside the row.</td>
+          <td>Assigned per field by the validator (HIGH / MEDIUM / LOW / MISSING) and stored so the review UI can <strong>auto-accept HIGH, pre-fill MEDIUM, flag LOW</strong>.</td>
+        </tr>
+        <tr>
+          <td class="tag">Source attribution</td>
+          <td class="prev"><code>ResolvedField</code> tracks winning source and alternatives, with conflict logs in Python — but the final Excel does not expose per-field source.</td>
+          <td>Every row carries a <code>source_documents</code> JSONB list of contributing documents; per-field source tracking is designed into the schema and visible to reviewers.</td>
+        </tr>
+        <tr>
+          <td class="tag">Feedback loop</td>
+          <td class="prev">No persistent correction store. Improving a miss means re-running with updated YAML or updated code.</td>
+          <td>Corrections are persisted and re-injected on the next run via three channels:
+            <ul class="clean">
+              <li>Few-shot examples in the extraction prompt</li>
+              <li>YAML domain-knowledge updates (new USOCs, new field mappings)</li>
+              <li>Known-correction hints (&ldquo;do not extract X as <em>wrong</em>; correct is <em>right</em>&rdquo;)</li>
+            </ul>
+          </td>
+        </tr>
+        <tr>
+          <td class="tag">Crash-safety / resume</td>
+          <td class="prev">OCR cache and classification manifest reused across runs. A mid-run failure typically restarts the account.</td>
+          <td>Per-file extractions cached to <code>/data/cache/extractions/</code>; a resumed run reuses completed work and only re-does what's missing.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ============ INFRA / TECH ============ -->
+    <h2>Infrastructure &amp; scale</h2>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 22%">Area</th>
+          <th class="col-prev">Previous Platform (v3)</th>
+          <th class="col-new">New Platform</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="tag">Backend</td>
+          <td class="prev">FastAPI, JWT auth, WebSocket streaming for live status. SQLite (<code>inventory.db</code>) for transient staging.</td>
+          <td>FastAPI with SQLAlchemy async, <strong>PostgreSQL + pgvector</strong> as system of record. Uploads / documents / extraction runs / extracted rows / corrections modeled explicitly; soft-delete with bin retention.</td>
+        </tr>
+        <tr>
+          <td class="tag">Frontend</td>
+          <td class="prev">React + TypeScript + Material-UI. Pages: Dashboard, ProjectDetail, Checklist, Projects. Column-toggle results table, Excel download.</td>
+          <td>Next.js + Tailwind + shadcn/ui. Pages: Dashboard, Upload, Results, Review, Analytics, Bin, Settings. Review UI aligns extracted fields with the source document for reviewer triage.</td>
+        </tr>
+        <tr>
+          <td class="tag">Models</td>
+          <td class="prev">Gemini 2.5 Flash for optional classifier and OCR; Anthropic Claude configured as fallback.</td>
+          <td>Gemini 2.5 Flash / Pro (adaptive by format familiarity), Pro multimodal for scanned PDFs. Claude for merge-conflict resolution only.</td>
+        </tr>
+        <tr>
+          <td class="tag">Parallelism</td>
+          <td class="prev">Per-account sequential processing inside each pipeline run.</td>
+          <td>Section-level batches with a semaphore allowing up to <strong>200 concurrent Gemini calls</strong>. A 472-page enterprise bill extracts in the order of seconds.</td>
+        </tr>
+        <tr>
+          <td class="tag">Deployability</td>
+          <td class="prev">Single FastAPI process serving API + static frontend; SQLite on disk. Cloud Build config present.</td>
+          <td>Docker Compose for Postgres + Redis; backend and frontend run independently. Caches live on disk under <code>/data/</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ============ KEPT VS REBUILT ============ -->
+    <h2>What carries forward — and what doesn't</h2>
+
+    <div class="cols-2">
+      <div>
+        <h2 style="margin-top:0;">Kept <span class="kept">unchanged</span></h2>
+        <ul class="clean">
+          <li><strong>The 60-field schema</strong> (DD2 info, location, carrier, service, component, circuit speeds, Z-location, contract terms)</li>
+          <li><strong>S / C row typing</strong> — Service summary vs. Component line item</li>
+          <li><strong>Human-in-the-loop review</strong> as the delivery model</li>
+          <li><strong>Carrier configs in YAML</strong> as the unit of extension</li>
+          <li><strong>Target accuracy bands</strong> — &gt;98% structured, &gt;90% semi-structured, &gt;80% fuzzy, &gt;75% contract</li>
+          <li><strong>Excel export</strong> for handoff to downstream workflows</li>
+        </ul>
+      </div>
+      <div>
+        <h2 style="margin-top:0;">Rebuilt <span class="delta-pill">new platform</span></h2>
+        <ul class="clean">
+          <li>Extraction moved from hand-coded parsers to <strong>LLM extraction with carrier prompts</strong></li>
+          <li>Carrier onboarding moved from <strong>code + YAML</strong> to <strong>YAML + prompts only</strong></li>
+          <li>OCR folded into the main flow via <strong>multimodal extraction</strong></li>
+          <li>Storage moved from <strong>SQLite + Excel</strong> to <strong>PostgreSQL + pgvector</strong></li>
+          <li>Classification hardened with <strong>three-stage agreement + post-extraction re-check</strong></li>
+          <li>QA extended with a dedicated <strong>Compliance stage</strong></li>
+          <li>Throughput moved from <strong>sequential</strong> to <strong>200-way parallel</strong> with crash-safe caching</li>
+          <li>A <strong>persistent correction loop</strong> now improves extractions between runs</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="callout" style="margin-top: 20px;">
+      <strong>Why this matters for the client.</strong> The v3 platform is a validated POC on a fixed carrier set. The new platform is a foundation for expanding carriers and clients without re-opening the codebase: a new carrier is a <em>configuration drop</em>, a new format variant is a <em>format YAML</em>, and every correction a reviewer makes makes the next run better.
+    </div>
+
+    <!-- ============ APPENDIX ============ -->
+    <h2>Appendix — file-level mapping (for engineers)</h2>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 22%">Concern</th>
+          <th class="col-prev">Previous (<code>digital-direction</code>)</th>
+          <th class="col-new">New (<code>Platform/</code>)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="tag">Pipeline orchestration</td>
+          <td class="prev"><code>main.py</code>, <code>backend/services/pipeline_runner.py</code></td>
+          <td><code>backend/pipeline/orchestrator.py</code></td>
+        </tr>
+        <tr>
+          <td class="tag">Classification</td>
+          <td class="prev"><code>src/pipeline/discovery.py</code>, <code>src/pipeline/llm_classifier.py</code></td>
+          <td><code>backend/pipeline/classifier.py</code></td>
+        </tr>
+        <tr>
+          <td class="tag">Parsing</td>
+          <td class="prev"><code>src/parsers/{windstream,peerless,att,spectrum,ocr}/*</code></td>
+          <td><code>backend/pipeline/parser.py</code> (routes to Docling / pdfplumber / pandas / multimodal)</td>
+        </tr>
+        <tr>
+          <td class="tag">Extraction</td>
+          <td class="prev">— (hand-coded inside parsers)</td>
+          <td><code>backend/pipeline/extractor.py</code>, <code>configs/carriers/{name}/prompts/*.md</code>, <code>configs/carriers/{name}/domain_knowledge/*.yaml</code></td>
+        </tr>
+        <tr>
+          <td class="tag">Merging</td>
+          <td class="prev"><code>src/merge/{carrier}.py</code>, <code>src/merge/source_resolver.py</code></td>
+          <td><code>backend/pipeline/merger.py</code>, <code>configs/carriers/{name}/carrier.yaml</code> (<code>merge_rules</code>)</td>
+        </tr>
+        <tr>
+          <td class="tag">Validation</td>
+          <td class="prev"><code>src/rules/qa_checklist.py</code>, <code>src/rules/confidence.py</code></td>
+          <td><code>backend/pipeline/validator.py</code></td>
+        </tr>
+        <tr>
+          <td class="tag">Compliance</td>
+          <td class="prev">—</td>
+          <td><code>backend/pipeline/compliance.py</code></td>
+        </tr>
+        <tr>
+          <td class="tag">Config loader</td>
+          <td class="prev"><code>src/config/carrier_config.py</code> per-carrier YAML</td>
+          <td><code>backend/config_loader.py</code> (<code>ConfigStore</code>)</td>
+        </tr>
+        <tr>
+          <td class="tag">Persistence</td>
+          <td class="prev"><code>backend/db.py</code> (SQLite)</td>
+          <td><code>backend/models/orm.py</code>, <code>db/</code> (PostgreSQL + pgvector)</td>
+        </tr>
+        <tr>
+          <td class="tag">Frontend</td>
+          <td class="prev"><code>frontend/src/pages/{Login,Dashboard,ProjectDetail,Checklist}.tsx</code></td>
+          <td><code>frontend/src/</code> (Next.js) — Dashboard, Upload, Results, Review, Analytics, Bin, Settings</td>
+        </tr>
+        <tr>
+          <td class="tag">Output</td>
+          <td class="prev"><code>src/output/inventory.py</code> (multi-sheet Excel)</td>
+          <td>Database-first; Excel export from stored rows</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <footer>
+      <span>Digital Direction &middot; Pipeline Comparison</span>
+      <span>Companion to <code>docs/client-onepager.html</code> &middot; April 2026</span>
+    </footer>
+
+    </div>
+  </main>
+</body>
+</html>

@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Digital Direction - High Level Architecture</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #f8f9fa; padding: 40px; }
+  .diagram-container { max-width: 1400px; margin: 0 auto; background: white; border-radius: 16px; padding: 48px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
+  .title { text-align: center; margin-bottom: 8px; font-size: 24px; font-weight: 700; color: #1a1a2e; }
+  .subtitle { text-align: center; margin-bottom: 40px; font-size: 14px; color: #666; }
+
+  .arch-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+
+  .layer { border-radius: 12px; padding: 20px 24px; position: relative; }
+  .layer-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+  .layer-label .icon { width: 20px; height: 20px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: white; }
+
+  .components { display: flex; gap: 12px; flex-wrap: wrap; }
+  .component { background: white; border-radius: 8px; padding: 12px 16px; border: 1.5px solid; min-width: 140px; flex: 1; }
+  .component .name { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+  .component .tech { font-size: 10px; color: #666; }
+  .component .desc { font-size: 10px; color: #888; margin-top: 4px; line-height: 1.4; }
+
+  /* Layer colors */
+  .layer-ingest { background: #e8f5e9; }
+  .layer-ingest .layer-label { color: #2e7d32; }
+  .layer-ingest .layer-label .icon { background: #2e7d32; }
+  .layer-ingest .component { border-color: #a5d6a7; }
+  .layer-ingest .component .name { color: #2e7d32; }
+
+  .layer-process { background: #e3f2fd; }
+  .layer-process .layer-label { color: #1565c0; }
+  .layer-process .layer-label .icon { background: #1565c0; }
+  .layer-process .component { border-color: #90caf9; }
+  .layer-process .component .name { color: #1565c0; }
+
+  .layer-ai { background: #f3e5f5; }
+  .layer-ai .layer-label { color: #7b1fa2; }
+  .layer-ai .layer-label .icon { background: #7b1fa2; }
+  .layer-ai .component { border-color: #ce93d8; }
+  .layer-ai .component .name { color: #7b1fa2; }
+
+  .layer-eval { background: #fff3e0; }
+  .layer-eval .layer-label { color: #e65100; }
+  .layer-eval .layer-label .icon { background: #e65100; }
+  .layer-eval .component { border-color: #ffcc80; }
+  .layer-eval .component .name { color: #e65100; }
+
+  .layer-data { background: #e0f2f1; }
+  .layer-data .layer-label { color: #00695c; }
+  .layer-data .layer-label .icon { background: #00695c; }
+  .layer-data .component { border-color: #80cbc4; }
+  .layer-data .component .name { color: #00695c; }
+
+  .layer-output { background: #fce4ec; }
+  .layer-output .layer-label { color: #c62828; }
+  .layer-output .layer-label .icon { background: #c62828; }
+  .layer-output .component { border-color: #ef9a9a; }
+  .layer-output .component .name { color: #c62828; }
+
+  .layer-infra { background: #eceff1; }
+  .layer-infra .layer-label { color: #37474f; }
+  .layer-infra .layer-label .icon { background: #37474f; }
+  .layer-infra .component { border-color: #b0bec5; }
+  .layer-infra .component .name { color: #37474f; }
+
+  /* Flow arrows */
+  .flow-arrow { text-align: center; padding: 4px 0; color: #999; font-size: 18px; letter-spacing: 4px; }
+
+  /* Sources row */
+  .sources { display: flex; gap: 10px; justify-content: center; margin-bottom: 20px; flex-wrap: wrap; }
+  .source { background: #fff; border: 2px dashed #bbb; border-radius: 8px; padding: 10px 18px; font-size: 11px; color: #555; text-align: center; min-width: 120px; }
+  .source .s-icon { font-size: 18px; margin-bottom: 4px; }
+  .source .s-label { font-weight: 600; }
+
+  .gcp-badge { display: inline-flex; align-items: center; gap: 6px; background: #4285f4; color: white; padding: 6px 16px; border-radius: 20px; font-size: 12px; font-weight: 600; margin-bottom: 24px; }
+  .gcp-badge-container { text-align: center; }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+
+  .footer { text-align: center; margin-top: 24px; font-size: 11px; color: #999; }
+</style>
+</head>
+<body>
+<div class="diagram-container">
+  <div class="title">AI-Powered Carrier Operations Optimization Platform</div>
+  <div class="subtitle">Digital Direction - High Level Architecture on Google Cloud</div>
+
+  <div class="gcp-badge-container">
+    <span class="gcp-badge">Google Cloud Platform</span>
+  </div>
+
+  <!-- Data Sources -->
+  <div class="sources">
+    <div class="source"><div class="s-icon">&#128196;</div><div class="s-label">Carrier Invoices</div>PDF, Images</div>
+    <div class="source"><div class="s-icon">&#128221;</div><div class="s-label">CSR Records</div>Spreadsheets, CSV</div>
+    <div class="source"><div class="s-icon">&#128203;</div><div class="s-label">Contracts</div>PDF, DOCX</div>
+    <div class="source"><div class="s-icon">&#127760;</div><div class="s-label">Portal Exports</div>HTML, CSV, API</div>
+    <div class="source"><div class="s-icon">&#128231;</div><div class="s-label">Email / Submittals</div>EML, Attachments</div>
+    <div class="source"><div class="s-icon">&#128202;</div><div class="s-label">Operational Reports</div>Excel, PDF</div>
+  </div>
+
+  <div class="flow-arrow">&#9660; &#9660; &#9660;</div>
+
+  <div class="arch-grid">
+    <!-- Layer 1: Ingestion -->
+    <div class="layer layer-ingest">
+      <div class="layer-label"><span class="icon">1</span> INGESTION LAYER</div>
+      <div class="components">
+        <div class="component">
+          <div class="name">Document Intake API</div>
+          <div class="tech">Cloud Run</div>
+          <div class="desc">REST API for document upload, email webhook, scheduled portal pulls</div>
+        </div>
+        <div class="component">
+          <div class="name">Event Bus</div>
+          <div class="tech">Pub/Sub</div>
+          <div class="desc">Async document processing queue with dead-letter handling</div>
+        </div>
+        <div class="component">
+          <div class="name">Document Store</div>
+          <div class="tech">Cloud Storage</div>
+          <div class="desc">Raw document staging, carrier-partitioned, lifecycle policies</div>
+        </div>
+        <div class="component">
+          <div class="name">Carrier Config Store</div>
+          <div class="tech">Cloud SQL (PostgreSQL)</div>
+          <div class="desc">Extraction templates, field mappings, validation rules per carrier</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-arrow">&#9660; &#9660; &#9660;</div>
+
+    <!-- Layer 2: AI Processing -->
+    <div class="layer layer-ai">
+      <div class="layer-label"><span class="icon">2</span> AI EXTRACTION LAYER</div>
+      <div class="components">
+        <div class="component">
+          <div class="name">Document Classifier</div>
+          <div class="tech">Vertex AI (Gemini)</div>
+          <div class="desc">Multi-modal classification: invoice, CSR, contract, report</div>
+        </div>
+        <div class="component">
+          <div class="name">Primary Extractor</div>
+          <div class="tech">Vertex AI (Gemini)</div>
+          <div class="desc">Config-driven field extraction with prompt templates per carrier</div>
+        </div>
+        <div class="component">
+          <div class="name">Fallback Extractor</div>
+          <div class="tech">Document AI</div>
+          <div class="desc">Structured parsing fallback for low-confidence Gemini outputs</div>
+        </div>
+        <div class="component">
+          <div class="name">Confidence Scorer</div>
+          <div class="tech">Cloud Run</div>
+          <div class="desc">Per-field confidence scoring, cross-field validation, threshold routing</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-arrow">&#9660; &#9660; &#9660;</div>
+
+    <!-- Layer 3: Validation & Processing -->
+    <div class="layer layer-process">
+      <div class="layer-label"><span class="icon">3</span> VALIDATION & PROCESSING LAYER</div>
+      <div class="components">
+        <div class="component">
+          <div class="name">Rule Engine</div>
+          <div class="tech">Cloud Run</div>
+          <div class="desc">Config-driven validation rules, cross-field checks, business logic</div>
+        </div>
+        <div class="component">
+          <div class="name">Human Review UI</div>
+          <div class="tech">Cloud Run (Frontend)</div>
+          <div class="desc">Web interface for low-confidence review, corrections feed back to model</div>
+        </div>
+        <div class="component">
+          <div class="name">Pipeline Orchestrator</div>
+          <div class="tech">Cloud Run + Pub/Sub</div>
+          <div class="desc">Workflow state management, retry logic, circuit breaker</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-arrow">&#9660; &#9660; &#9660;</div>
+
+    <div class="two-col">
+      <!-- Layer 4: Eval & Self-Heal -->
+      <div class="layer layer-eval">
+        <div class="layer-label"><span class="icon">4</span> EVALUATION & SELF-HEALING</div>
+        <div class="components" style="flex-direction: column;">
+          <div class="component">
+            <div class="name">Eval Pipeline</div>
+            <div class="tech">Vertex AI Pipelines</div>
+            <div class="desc">Automated accuracy vs ground truth, per-carrier/field metrics, regression detection</div>
+          </div>
+          <div class="component">
+            <div class="name">Drift Detector</div>
+            <div class="tech">BigQuery ML + Cloud Run</div>
+            <div class="desc">Statistical monitoring of confidence distributions, anomaly alerting</div>
+          </div>
+          <div class="component">
+            <div class="name">Self-Heal Engine</div>
+            <div class="tech">Cloud Run</div>
+            <div class="desc">Auto-retry alternate strategies, rule adjustment proposals, circuit breaker</div>
+          </div>
+          <div class="component">
+            <div class="name">Feedback Loop</div>
+            <div class="tech">Cloud SQL + Vertex AI</div>
+            <div class="desc">Human corrections aggregated for fine-tuning, active learning for edge cases</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Layer 5: Data & Analytics -->
+      <div class="layer layer-data">
+        <div class="layer-label"><span class="icon">5</span> DATA & ANALYTICS</div>
+        <div class="components" style="flex-direction: column;">
+          <div class="component">
+            <div class="name">Analytics Warehouse</div>
+            <div class="tech">BigQuery</div>
+            <div class="desc">Carrier-normalized extraction data, historical trends, eval results</div>
+          </div>
+          <div class="component">
+            <div class="name">Operational Dashboards</div>
+            <div class="tech">Looker Studio</div>
+            <div class="desc">Extraction accuracy, processing volume, carrier performance, pipeline health</div>
+          </div>
+          <div class="component">
+            <div class="name">Monitoring & Alerts</div>
+            <div class="tech">Cloud Monitoring</div>
+            <div class="desc">Pipeline observability, accuracy alerting, cost monitoring, SLA tracking</div>
+          </div>
+          <div class="component">
+            <div class="name">Ground Truth Store</div>
+            <div class="tech">Cloud Storage + BigQuery</div>
+            <div class="desc">Human-verified extraction baselines for eval, versioned per carrier</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-arrow">&#9660; &#9660; &#9660;</div>
+
+    <!-- Layer 6: Output -->
+    <div class="layer layer-output">
+      <div class="layer-label"><span class="icon">6</span> OUTPUT & INTEGRATION</div>
+      <div class="components">
+        <div class="component">
+          <div class="name">Structured Data Export</div>
+          <div class="tech">Cloud Run API</div>
+          <div class="desc">JSON, CSV, standardized output delivery to downstream systems</div>
+        </div>
+        <div class="component">
+          <div class="name">Notification Service</div>
+          <div class="tech">Pub/Sub + Cloud Functions</div>
+          <div class="desc">Processing complete, review needed, accuracy alerts, SLA notifications</div>
+        </div>
+        <div class="component">
+          <div class="name">Carrier Onboarding Framework</div>
+          <div class="tech">Cloud SQL + Cloud Run</div>
+          <div class="desc">Config-driven: add new carriers via templates, not code. Auto-validated before go-live.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Layer 7: Infrastructure -->
+    <div class="layer layer-infra">
+      <div class="layer-label"><span class="icon">&#8734;</span> CROSS-CUTTING: SECURITY, MLOPS & INFRASTRUCTURE</div>
+      <div class="components">
+        <div class="component">
+          <div class="name">IAM & Security</div>
+          <div class="tech">Cloud IAM, VPC, KMS</div>
+          <div class="desc">RBAC, encryption at rest/transit, audit logging, least privilege</div>
+        </div>
+        <div class="component">
+          <div class="name">CI/CD Pipeline</div>
+          <div class="tech">Cloud Build</div>
+          <div class="desc">Automated build, test, deploy for all services and models</div>
+        </div>
+        <div class="component">
+          <div class="name">Infrastructure as Code</div>
+          <div class="tech">Terraform</div>
+          <div class="desc">All GCP resources provisioned and managed via IaC</div>
+        </div>
+        <div class="component">
+          <div class="name">MLOps</div>
+          <div class="tech">Vertex AI Pipelines</div>
+          <div class="desc">Model versioning, A/B testing, retraining triggers, prompt management</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">Digital Direction - AI-Powered Carrier Operations Optimization | Techjays, INC | Google Cloud Platform | April 2026</div>
+</div>
+</body>
+</html>

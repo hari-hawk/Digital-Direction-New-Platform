@@ -1,0 +1,135 @@
+name: "Windstream"
+aliases: ["Windstream", "windstream", "Kinetic", "Kinetic Business", "Windstream Enterprise"]
+
+filename_patterns:
+  invoice:
+    - pattern: "^Windstream_\\d+_\\d+_BILL"
+      confidence: 0.95
+    - pattern: "Windstream.*BILL"
+      confidence: 0.85
+  csr:
+    - pattern: "\\d{5,10}\\s+CSR"
+      confidence: 0.80
+    - pattern: "CSR Record"
+      confidence: 0.85
+  contract:
+    # No reliable filename pattern for Windstream contracts.
+    # Contracts are classified via first-page text ("Windstream", "Service Agreement").
+    # Client-specific identifiers (e.g., master agreement numbers) are learned
+    # and stored in the known_accounts DB table after first classification.
+  report:
+    - pattern: "Windstream Report"
+      confidence: 0.90
+    - pattern: "\\d+_Report"
+      confidence: 0.70
+  schedule:
+    - pattern: "Pending.*Contract"
+      confidence: 0.95
+      case_insensitive: true
+
+account_number_patterns:
+  - pattern: "ACCOUNT\\s+NUMBER\\s+(\\d{7,9})"
+    format_desc: "Account after ACCOUNT NUMBER keyword"
+    example: "ACCOUNT NUMBER 123456789"
+  - pattern: "Acct\\s*Number\\s+(\\d{7,9})"
+    format_desc: "Account after Acct Number keyword (CSR format)"
+    example: "Acct Number 1234567"
+  - pattern: "\\n(\\d{9})\\s+\\w{3}\\s+\\d{1,2},\\s+\\d{4}"
+    format_desc: "9-digit account on new line followed by date (invoice header)"
+    example: "123456789 Aug 27, 2025"
+    notes: "Windstream invoice header: account number + invoice date on same line"
+  - pattern: "\\b(\\d{7})\\b"
+    format_desc: "7-digit numeric fallback"
+    example: "1234567"
+
+first_page_signals:
+  required_any:
+    - "Windstream"
+    - "Kinetic"
+  doc_type_markers:
+    invoice:
+      - "Invoice"
+      - "Amount Due"
+      - "LOCATION SUMMARY"
+      - "ACCOUNT ACTIVITY"
+      - "Billing Invoice"
+    csr:
+      - "Customer Service Record"
+      - "PRODUCT SUMMARY"
+      - "TELEPHONE NUMBER SUMMARY"
+    contract:
+      - "SERVICE TERMS"
+      - "Quote"
+      - "Amendment"
+      - "Service Agreement"
+
+merge_rules:
+  account_normalization:
+    char_class: "digits"
+  phone_normalization:
+    pad_short_phones: false
+  doc_type_roles:
+    invoice: primary
+    csr: primary
+    report: primary
+    contract: enrichment
+    schedule: enrichment
+    did_list: enrichment
+    email: enrichment
+  # Windstream portal reports have contract-rate MRC (unbundled pricing).
+  # Invoices show $0 for bundled items. Report MRC is the ground truth
+  # for per-component pricing, so it gets higher priority than invoice.
+  field_priority_overrides:
+    monthly_recurring_cost:
+      report: 11
+      invoice: 10
+    cost_per_unit:
+      report: 11
+      invoice: 10
+    quantity:
+      report: 10
+      invoice: 9
+    carrier_circuit_number:
+      report: 10
+      invoice: 8
+    # Contract schedules (e.g., Pending Contracts XLSX) have per-sub-account
+    # dates that are more accurate than contract PDFs (which contain signing
+    # dates at master account level, not effective dates per sub-account).
+    contract_begin_date:
+      schedule: 12
+      report: 11
+      contract: 10
+    contract_expiration_date:
+      schedule: 12
+      report: 11
+      contract: 10
+    contract_term_months:
+      schedule: 12
+      report: 11
+      contract: 10
+  account_equivalence_fields:
+    - carrier_account_number
+    - master_account
+    - sub_account_number_1
+
+# Service type normalization — maps product variants to standard categories.
+# Applied during merge to normalize LLM extraction output that uses product
+# names instead of the standard categories defined in the extraction prompt.
+# These mappings reflect what Windstream documents call these services,
+# not golden data categorizations.
+service_type_normalization:
+  "SD-WAN VMware": "SDWAN"
+  "SD-WAN Service": "SDWAN"
+  "SD-WAN Management": "SDWAN"
+  "SD-WAN": "SDWAN"
+  "UCaaS Standard": "UCaaS"
+  "Dynamic IP": "Internet"
+  "Dynamic IP Basic": "Internet"
+  "Business Internet": "Internet"
+  "Internet Service": "Internet"
+  "Ethernet Access": "Ethernet"
+  "MPLS VPN": "MPLS"
+
+# known_identifiers are NOT stored here — they are client-specific, not carrier-specific.
+# Client-to-carrier mappings are learned dynamically and stored in the known_accounts DB table.
+# Example: a master agreement number is learned when the first such file is classified via first-page text.

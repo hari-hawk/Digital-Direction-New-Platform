@@ -1,0 +1,41 @@
+# Peerless Network — subscription export column mapping
+#
+# Maps columns from the Peerless Portal subscriptions_export CSV to schema fields.
+# Headers: Account ID, Service Name, Location Name, Location Address,
+#          Service Description, USOC1, Provider, MRC, Tax Code, Status, Effective, Ends
+
+# Account ID contains composite IDs like "monarch_ACCTID123_911" or
+# location-level IDs like "Store Name 667". Map to carrier_account_number
+# so the merger can group by account.
+account id: carrier_account_number
+
+# Service Name contains the subscription identifier — often the location
+# store number (e.g., "Location Name 667") for per-location services.
+# Map to sub_account_number_1 for location-level grouping.
+service name: sub_account_number_1
+
+# Service Description has the service component and quantity
+# (e.g., "Monthly Channel Fee - Location Name 667 - Qty 2")
+service description: component_or_feature_name
+
+# USOC1 is the service code
+usoc1: usoc
+
+# Provider name — NOT mapped to carrier_name.
+# CSV value is "The Peerless Portal" which doesn't match golden "Peerless Network".
+# carrier_name is set from carrier.yaml config name instead (via structured_extractor).
+# provider: carrier_name  # REMOVED — use config canonical name
+
+# MRC amount (already mapped in base config, but explicit here)
+mrc: monthly_recurring_cost
+
+# Status field
+status: status
+
+# Date fields
+effective: contract_begin_date
+ends: contract_expiration_date
+
+# Location fields (mostly "--" in this export but map them anyway)
+location name: billing_name
+location address: service_address_1

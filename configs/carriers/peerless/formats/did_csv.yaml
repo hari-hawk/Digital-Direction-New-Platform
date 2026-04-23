@@ -1,0 +1,20 @@
+name: "Peerless DID List (CSV/XLSX)"
+version: "1.0"
+
+signature:
+  required_patterns:
+    - "DID"
+    - "Destination"
+  any_of_patterns:
+    - "Peerless Portal"
+    - "Provider"
+
+processing_path: "pandas"
+
+extractable_fields:
+  high_confidence:
+    - phone_number
+    - carrier_name
+  medium_confidence:
+    - service_type
+    - component_or_feature_name

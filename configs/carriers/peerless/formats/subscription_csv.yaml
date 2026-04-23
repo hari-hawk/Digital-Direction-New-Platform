@@ -1,0 +1,23 @@
+name: "Peerless Subscription Export (CSV/XLSX)"
+version: "1.0"
+
+signature:
+  required_patterns:
+    - "Service Name"
+    - "MRC"
+  any_of_patterns:
+    - "Effective"
+    - "Status"
+    - "Tax Code"
+
+processing_path: "pandas"
+
+extractable_fields:
+  high_confidence:
+    - service_type
+    - component_or_feature_name
+    - monthly_recurring_cost
+    - quantity
+  medium_confidence:
+    - contract_begin_date
+    - contract_expiration_date

@@ -1,0 +1,184 @@
+name: "AT&T"
+aliases: ["ATT", "AT&T", "at&t", "SBC", "Southwestern Bell", "BellSouth", "att.com"]
+
+filename_patterns:
+  invoice:
+    - pattern: "^ATT\\s*-\\s*\\d+"
+      confidence: 0.95
+    - pattern: "ATT_.*_BILL"
+      confidence: 0.90
+  csr:
+    - pattern: "\\d{3}\\s+\\d{3}\\s+\\d{4}\\s+\\d{3}.*CSR"
+      confidence: 0.95
+  contract:
+    - pattern: "centrex.*contract"
+      confidence: 0.80
+      case_insensitive: true
+    - pattern: "ArsWWWServlet"
+      confidence: 0.70
+  service_guide:
+    - pattern: "Service.Guide.*ILEC"
+      confidence: 0.85
+
+account_number_patterns:
+  - pattern: "(\\d{3})\\s?(\\d{3})[-]?(\\d{4})\\s?(\\d{3})\\s?\\d"
+    format_desc: "XXX XXX-XXXX XXX (X check digit dropped)"
+    example: "555 123-4567 890 1 → 5551234567890"
+    notes: "AT&T canonical account is 13 digits. The trailing check digit on invoices is NOT part of the account number."
+  - pattern: "ACCOUNT\\s+(\\d{13})\\s+BILLDATE"
+    format_desc: "13-digit CSR account number"
+    example: "ACCOUNT 5551234567890 BILLDATE"
+
+first_page_signals:
+  required_any:
+    - "AT&T"
+    - "at&t"
+    - "att.com"
+    - "SBC"
+  doc_type_markers:
+    invoice:
+      - "Bill-At-A-Glance"
+      - "Billing Summary"
+      - "TotalAmountDue"
+      - "CurrentCharges"
+      - "MonthlyService"
+    csr:
+      - "CUSTOMER SERVICE RECORD"
+      - "BILLDATE"
+      - "---LISTINGS---"
+    contract:
+      - "SERVICE AGREEMENT"
+      - "Terms and Conditions"
+      - "AMENDMENT"
+    service_guide:
+      - "GUIDEBOOK"
+      - "Centrex Service"
+
+merge_rules:
+  account_normalization:
+    char_class: "digits"
+    canonical_length: 13
+    check_digit_position: "trailing"
+  phone_normalization:
+    pad_short_phones: true
+    pad_source: "account_prefix"
+    pad_digits: 3
+  doc_type_roles:
+    invoice: primary
+    csr: primary
+    contract: enrichment
+    service_guide: enrichment
+    email: enrichment
+  account_equivalence_fields:
+    - carrier_account_number
+    - master_account
+    - sub_account_number_1
+  # AT&T invoices show the billing/mailing address (e.g., corporate HQ "5555
+  # PERIMETER DR"), not per-service locations. CSRs have per-TN service addresses.
+  # Override priority so CSR addresses win, and exclude address fields from
+  # account-level propagation (multi-location accounts — each TN has its own
+  # address, filled by phone-level propagation within merge groups).
+  field_priority_overrides:
+    service_address_1:
+      csr: 10
+      invoice: 4
+    service_address_2:
+      csr: 10
+      invoice: 4
+    city:
+      csr: 10
+      invoice: 4
+    state:
+      csr: 10
+      invoice: 4
+    zip:
+      csr: 10
+      invoice: 4
+  # AT&T has multi-location Centrex accounts (10+ locations under one account).
+  # Address fields should NOT propagate at account level — each TN group has
+  # its own service location. Phone-level propagation within merge groups
+  # handles this correctly.
+  non_propagating_fields:
+    - service_address_1
+    - service_address_2
+    - city
+    - state
+    - zip
+  # Contract propagation at account level. Safe for single-contract accounts
+  # (e.g., Centrex with one /TA across all TNs). For multi-contract accounts
+  # (per-location contracts), this would over-propagate — review and disable
+  # if new account types have different contract terms per TN group.
+  extra_propagation_fields:
+    - contract_term_months
+    - contract_begin_date
+    - contract_expiration_date
+    - contract_number
+    - auto_renew
+    - currently_month_to_month
+
+# Normalize service_type values extracted by LLM to standard categories.
+# "BLC" = Business Local Calling — this is a POTS service plan, not a service type.
+service_type_normalization:
+  "BLC": "POTS"
+  "Business Local Calling": "POTS"
+  "Centrex Service": "Centrex"
+  "Advanced Centrex Service": "Centrex"
+
+# USOC → service_type mapping. When a row has no service_type but has a USOC,
+# infer service_type from this table. Source: AT&T service catalog.
+# Initial seed from POC documents — expand as new USOCs are encountered.
+# The classification rule: CPX*/SX*/Z* prefixes are Centrex station/feature
+# codes; 1MB/LMB/C6OTT/TTB are POTS line types. This pattern generalizes
+# to any AT&T USOC — new codes should follow the same prefix convention.
+# Surcharges/fees (9ZR, NSR, UXT25, etc.) are NOT listed — they appear on
+# any line type and should inherit service_type from the parent TN.
+usoc_service_type:
+  # POTS station/line USOCs
+  "1MB": "POTS"
+  "LMB": "POTS"
+  "C6OTT": "POTS"
+  "TTB": "POTS"
+  "NALDC": "POTS"
+  "N8D": "POTS"
+  "NMP": "POTS"
+  "NSD": "POTS"
+  "NBJ": "POTS"
+  "ESC": "POTS"
+  "ESM": "POTS"
+  "ESX": "POTS"
+  "NSS": "POTS"
+  "NSQ": "POTS"
+  "NP": "POTS"
+  "NP3": "POTS"
+  "NPU": "POTS"
+  "FYW": "POTS"
+  "RTV1N": "POTS"
+  "PGO9T": "POTS"
+  "QBBUX": "POTS"
+  "QBPUL": "POTS"
+  "MNTPB": "POTS"
+  # Centrex USOCs
+  "CPXHE": "Centrex"
+  "CPXHF": "Centrex"
+  "CPXHX": "Centrex"
+  "CPXJC": "Centrex"
+  "SXPAA": "Centrex"
+  "SXS": "Centrex"
+  "RV8TX": "Centrex"
+  "NDC": "Centrex"
+  "CZA": "Centrex"
+  "CLT": "Centrex"
+  "NW1TD": "Centrex"
+  "UDP1X": "Centrex"
+  "ZSCUR": "Centrex"
+  "ZCFV1": "Centrex"
+  "ZCSAC": "Centrex"
+  "ZCVLD": "Centrex"
+
+# Derive currently_month_to_month from contract expiration dates.
+# If contract_expiration_date < today → "Yes" (expired, now month-to-month).
+# If contract_expiration_date >= today → "No" (still under contract).
+derive_currently_month_to_month: true
+
+# known_identifiers are NOT stored here — they are client-specific.
+# Client-to-carrier mappings are learned dynamically and stored in the known_accounts DB table.

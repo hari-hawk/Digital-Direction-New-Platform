@@ -1,0 +1,38 @@
+name: "Spectrum Enterprise Invoice (Single Location)"
+version: "1.0"
+
+signature:
+  required_patterns:
+    - "Spectrum"
+    - "Account Number"
+  any_of_patterns:
+    - "Spectrum Business for enterprise"
+    - "Recurring Charges"
+    - "Charge Details"
+
+processing_path: "raw_text"
+
+chunking:
+  global_context_source: "first_page"
+
+extractable_fields:
+  high_confidence:
+    - billing_name
+    - service_address_1
+    - city
+    - state
+    - zip
+    - carrier_account_number
+    - monthly_recurring_cost
+    - quantity
+    - cost_per_unit
+    - invoice_file_name
+    - charge_type
+  medium_confidence:
+    - service_type
+    - component_or_feature_name
+  not_available:
+    - phone_number
+    - btn
+    - carrier_circuit_number
+    - contract_term_months

@@ -1,0 +1,28 @@
+name: "Windstream CSR - Summary Format"
+version: "1.0"
+
+signature:
+  required_patterns:
+    - "Windstream Customer Service Record"
+  any_of_patterns:
+    - "PRODUCT SUMMARY"
+    - "TELEPHONE NUMBER SUMMARY"
+
+processing_path: "raw_text"
+
+chunking:
+  global_context_source: "first_page"
+
+extractable_fields:
+  high_confidence:
+    - billing_name
+    - service_address_1
+    - city
+    - state
+    - zip
+    - carrier_account_number
+    - btn
+    - phone_number
+  medium_confidence:
+    - service_type
+    - quantity
