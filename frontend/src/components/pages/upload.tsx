@@ -542,6 +542,7 @@ export function UploadPage({ onViewResults }: UploadPageProps) {
                 const isGrid = previousView === "grid";
                 const warnings = u.rowsWithIssues ?? 0;
                 const accounts = u.uniqueAccounts ?? 0;
+                const needsValidation = u.rowsNeedingCarrierValidation ?? 0;
                 // Carriers: LLM-detected post-extraction; fallback to classify-stage
                 // carrier labels, excluding "Unknown" which gets replaced once rows exist.
                 const carrierList = (u.carriers || []).filter((c) => c && c.toLowerCase() !== "unknown");
@@ -572,13 +573,25 @@ export function UploadPage({ onViewResults }: UploadPageProps) {
                                 {c}
                               </span>
                             ))
-                          ) : u.status === "done" ? null : (
+                          ) : u.status === "done" ? (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted/40 text-muted-foreground italic">
+                              unknown carrier
+                            </span>
+                          ) : (
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted/40 text-muted-foreground">
                               detecting…
                             </span>
                           )}
                           {carrierList.length > 4 && (
                             <span className="text-[10px] text-muted-foreground">+{carrierList.length - 4}</span>
+                          )}
+                          {needsValidation > 0 && (
+                            <span
+                              className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30"
+                              title={`${needsValidation} row${needsValidation === 1 ? "" : "s"} reference a carrier not in the registry — click to review and confirm`}
+                            >
+                              Validate carrier ({needsValidation})
+                            </span>
                           )}
                         </div>
                       </div>

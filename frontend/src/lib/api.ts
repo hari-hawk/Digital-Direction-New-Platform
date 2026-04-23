@@ -79,7 +79,8 @@ export interface UploadSummary {
   rows_with_issues?: number;
   rows_error_level?: number;
   unique_accounts?: number;
-  carriers?: string[]; // LLM-detected carrier names; non-"Unknown" when known
+  rows_needing_carrier_validation?: number;
+  carriers?: string[]; // Canonical names when registered, else raw LLM-detected string
 }
 
 export async function apiListUploads(): Promise<{ uploads: UploadSummary[] }> {

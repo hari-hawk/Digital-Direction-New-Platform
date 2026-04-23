@@ -97,6 +97,7 @@ export interface Upload {
   // Summary stats surfaced on Previous Uploads cards (set by backend post-extraction)
   rowsWithIssues?: number;
   uniqueAccounts?: number;
+  rowsNeedingCarrierValidation?: number;
 }
 
 interface ClassifiedFileFromAPI {
@@ -331,6 +332,7 @@ export const useAppStore = create<AppStore>()(
           carriers,
           rowsWithIssues: s.rows_with_issues,
           uniqueAccounts: s.unique_accounts,
+          rowsNeedingCarrierValidation: s.rows_needing_carrier_validation,
         };
 
         // If done, load results

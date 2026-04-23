@@ -149,6 +149,7 @@ def _list_uploads(include_deleted: bool = False, only_deleted: bool = False) -> 
             "rows_with_issues": data.get("rows_with_issues", 0),
             "rows_error_level": data.get("rows_error_level", 0),
             "unique_accounts": data.get("unique_accounts", 0),
+            "rows_needing_carrier_validation": data.get("rows_needing_carrier_validation", 0),
             # Effective carrier list: post-extraction names when available; else classify stage.
             "carriers": computed_carriers or classified_carriers,
         })
@@ -1030,15 +1031,36 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
         rows_error_level = sum(1 for r in all_rows
                                if any(i.get("severity") == "error" for i in (r.get("validation_issues") or [])))
         unique_accounts = len({r.get("carrier_account_number") for r in all_rows if r.get("carrier_account_number")})
-        # Prefer detected carrier_name from row data — falls back to routing key.
-        carrier_names = {
-            (r.get("carrier_name") or r.get("carrier") or "").strip()
-            for r in all_rows
-            if (r.get("carrier_name") or r.get("carrier"))
-        }
-        computed_carriers = sorted(c for c in carrier_names if c and c.lower() not in ("unknown", ""))
+
+        # Carrier post-processing:
+        #   - If LLM-extracted carrier_name matches a configured carrier (by
+        #     alias), canonicalize to the registry display name.
+        #   - If carrier_name was extracted but is NOT in the registry, keep the
+        #     extracted string AND flip row.status to "Validate carrier" so an
+        #     analyst can confirm + register it.
+        #   - If no carrier_name at all, leave the row alone — the upload card
+        #     will render as "Unknown" (truly no signal).
+        from backend.services.carrier_match import match_carrier_name
+        canonical_names: set[str] = set()
+        needs_validation_count = 0
+        for r in all_rows:
+            raw = r.get("carrier_name") or r.get("carrier")
+            match = match_carrier_name(raw)
+            if match is None:
+                continue
+            # Replace with canonical display name so the row + summary agree.
+            r["carrier_name"] = match.canonical_name
+            canonical_names.add(match.canonical_name)
+            if not match.is_registered:
+                needs_validation_count += 1
+                # Preserve a stronger status if one is already set (e.g. "Needs Review").
+                if not r.get("status"):
+                    r["status"] = "Validate carrier"
+        computed_carriers = sorted(n for n in canonical_names if n.lower() != "unknown")
         logger.info(f"Validation: {rows_with_issues} of {len(all_rows)} rows have issues ({rows_error_level} at error severity)")
-        logger.info(f"Computed: {unique_accounts} unique accounts, carriers={computed_carriers}")
+        logger.info(f"Carriers: {len(computed_carriers)} unique canonical, "
+                    f"{needs_validation_count} rows need carrier validation, "
+                    f"{unique_accounts} unique accounts, names={computed_carriers}")
 
         _update_upload_field(
             upload_id,
@@ -1048,6 +1070,7 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
             rows_error_level=rows_error_level,
             unique_accounts=unique_accounts,
             computed_carriers=computed_carriers,
+            rows_needing_carrier_validation=needs_validation_count,
         )
         _update_upload_results(upload_id, all_rows)
         logger.info(f"Upload {upload_id} complete: {len(all_rows)} total rows from {files_processed} files")

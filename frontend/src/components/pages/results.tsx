@@ -497,7 +497,8 @@ export function ResultsPage({ onReviewRow, onBack }: ResultsPageProps) {
                 const issues = (row as Record<string, unknown>).validation_issues as Array<{severity?: string; message?: string}> | undefined;
                 const status = (row as Record<string, unknown>).status as string | undefined;
                 const errorIssues = issues?.filter((i) => i?.severity === "error") ?? [];
-                const needsReview = status === "Needs Review" || errorIssues.length > 0;
+                const needsValidation = status === "Validate carrier";
+                const needsReview = status === "Needs Review" || errorIssues.length > 0 || needsValidation;
                 return (
                   <TableRow
                     key={row.id}
@@ -525,9 +526,11 @@ export function ResultsPage({ onReviewRow, onBack }: ResultsPageProps) {
                             className="bg-amber-500/15 text-amber-400 text-[10px] border border-amber-500/30"
                             title={errorIssues.length > 0
                               ? errorIssues.map((i) => i.message).filter(Boolean).join(" · ")
-                              : "Status: Needs Review"}
+                              : (needsValidation
+                                ? "Carrier name not in registry — confirm and register"
+                                : "Status: Needs Review")}
                           >
-                            Review
+                            {needsValidation ? "Validate" : "Review"}
                           </Badge>
                         )}
                       </div>
