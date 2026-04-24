@@ -30,11 +30,14 @@ account_number_patterns:
     example: "ACCOUNT 5551234567890 BILLDATE"
 
 first_page_signals:
+  # Must contain a PRIMARY AT&T mark — "AT&T" / "at&t" / "att.com". "SBC" was
+  # removed here because Windstream CSRs reference historical SBC billing codes
+  # and were getting false-classified as AT&T. "SBC" is still an alias for
+  # alias-based matching when no primary mark is present.
   required_any:
     - "AT&T"
     - "at&t"
     - "att.com"
-    - "SBC"
   doc_type_markers:
     invoice:
       - "Bill-At-A-Glance"

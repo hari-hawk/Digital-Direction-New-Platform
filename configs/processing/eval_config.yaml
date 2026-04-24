@@ -16,6 +16,8 @@ default_field_extractability:
     - billing_per_contract      # Analyst's rate comparison judgment
     - contract_file_name        # Analyst's file naming convention
     - mtm_or_less_than_year     # Borderline: derivable from dates but analyst applies business rules
+    - auto_renew                # AT&T docs don't state auto-renewal; analyst adds Yes/No from contract memory
+    - auto_renewal_notes        # Same — analyst commentary on renewal terms
 
   derived:
     - conversion_rate           # Always 1.0 for USD — analyst convention, not extracted

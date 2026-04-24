@@ -46,6 +46,28 @@ ADDITIONAL_CARRIERS = [
     "Hurricane Electric", "Equinix Fabric", "Megaport",
 ]
 
+# Observed in real uploads (NSS project) but missing from the primary lists.
+# Kept separate so the source attribution stays clear. Add more here as bulk
+# uploads surface new carriers.
+OBSERVED_CARRIERS = [
+    "Allstar Systems",
+    "BCN Telecom",
+    "Champlain Technology",
+    "Crown Castle",
+    "Delhi Telephone Company",
+    "Directv",
+    "FirstLight",
+    "Granite Telecommunications",
+    "Message Media",
+    "Mid Hudson Communications",
+    "Spectrotel",
+    "State Telephone Company",  # "StateTel" folder
+    "TDS Telecom",
+    "T-Mobile",
+    "Verizon Wireless",
+    "Charter Communications",   # distinct from Spectrum rebrand — invoices still say "Charter"
+]
+
 
 # ── Hand-curated aliases for carriers where auto-generation would miss common
 # variants. Everything else gets auto-generated from the display name. ────
@@ -115,6 +137,23 @@ MANUAL_ALIASES: dict[str, list[str]] = {
     "Hurricane Electric": ["HE", "he.net"],
     "Equinix Fabric": ["Equinix", "EquinixFabric"],
     "Megaport": ["Megaport Pty"],
+    # Observed-upload additions
+    "Allstar Systems": ["Allstar"],
+    "BCN Telecom": ["BCN", "BCN Telecomm"],
+    "Champlain Technology": ["Champlain"],
+    "Crown Castle": ["Crown Castle Fiber", "Crown Castle Fiber LLC"],
+    "Delhi Telephone Company": ["Delhi Tel", "Delhi Telephone"],
+    "Directv": ["DIRECTV", "Direct TV", "Direct-TV"],
+    "FirstLight": ["First Light", "FirstLight Fiber"],
+    "Granite Telecommunications": ["Granite", "Granite Telecom", "GraniteTelecommunications"],
+    "Message Media": ["MessageMedia", "Sinch Message Media", "SinchMessageMedia"],
+    "Mid Hudson Communications": ["Mid Hudson", "MidHudson"],
+    "Spectrotel": ["Spectrotel Business"],
+    "State Telephone Company": ["StateTel", "State Tel", "State Telephone"],
+    "TDS Telecom": ["TDS", "TDS Telecommunications"],
+    "T-Mobile": ["TMobile", "T Mobile", "TMUS"],
+    "Verizon Wireless": ["VZW", "Verizon Wireless Business"],
+    "Charter Communications": ["Charter", "Charter Business", "Charter Spectrum"],
 }
 
 
@@ -203,7 +242,7 @@ def existing_carrier_names(carriers_root: Path) -> dict[str, str]:
 
 def main():
     carriers_root = Path(__file__).parent.parent / "configs" / "carriers"
-    all_names = DD_MAJOR_CARRIERS + ADDITIONAL_CARRIERS
+    all_names = DD_MAJOR_CARRIERS + ADDITIONAL_CARRIERS + OBSERVED_CARRIERS
     by_name = existing_carrier_names(carriers_root)
 
     created = []

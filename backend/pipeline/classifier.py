@@ -16,16 +16,51 @@ from backend.models.schemas import ClassificationResult, ConfidenceLevel
 logger = logging.getLogger(__name__)
 
 
+# Minimum alias length for alias-based matching. Short aliases (e.g., "ACC",
+# "HKT", "SBC") false-positive against substrings like "access charge" or
+# "ATTN". 4 chars is the empirical sweet spot: catches "ATT", "Lumen" — wait,
+# "ATT" is 3. Kept at 4+ chars for safety; short tuned aliases live inside
+# each carrier's first_page_signals instead.
+MIN_ALIAS_LENGTH = 4
+
+
+def _alias_match_in_text(text: str, aliases: list[str]) -> tuple[str, int] | None:
+    """Word-boundary match of any ≥MIN_ALIAS_LENGTH alias within `text`.
+
+    Returns (alias, match_count) for the alias with the most hits, or None if
+    nothing matched. Word-boundary avoids "ACC" matching "access" substrings.
+    """
+    best: tuple[str, int] | None = None
+    for alias in aliases:
+        if len(alias) < MIN_ALIAS_LENGTH:
+            continue
+        # \b is Unicode-aware enough for ASCII carrier names; escape special chars
+        pattern = r"\b" + re.escape(alias) + r"\b"
+        matches = re.findall(pattern, text, flags=re.IGNORECASE)
+        if matches and (best is None or len(matches) > best[1]):
+            best = (alias, len(matches))
+    return best
+
+
 # ============================================
 # Stage A: Filename Pattern Matching
 # ============================================
 
 def classify_by_filename(filename: str) -> ClassificationResult:
-    """Match filename against carrier patterns. Fast, free, no file I/O."""
+    """Match filename against carrier patterns + aliases. Fast, free, no file I/O.
+
+    Two sub-stages:
+      1. filename_patterns — regex patterns from each tuned carrier's carrier.yaml.
+         Only the 4 tuned carriers define these.
+      2. alias scan — word-boundary match against every carrier's aliases.
+         Catches bulk uploads like "Windstream - invoice 614555.pdf" or
+         "Frontier 614-733-0580.pdf" from the 63 registry carriers.
+    """
     store = get_config_store()
     best_match = ClassificationResult(method="filename")
     best_score = 0.0
 
+    # Sub-stage 1: tuned filename_patterns
     for carrier_name, carrier_config in store.get_all_carriers().items():
         for doc_type, patterns in carrier_config.filename_patterns.items():
             for pattern in patterns:
@@ -37,6 +72,27 @@ def classify_by_filename(filename: str) -> ClassificationResult:
                         confidence=ConfidenceLevel.HIGH if pattern.confidence > 0.85 else ConfidenceLevel.MEDIUM,
                         method="filename",
                     )
+
+    # Sub-stage 2: alias scan — only kicks in when filename_patterns missed
+    # so we don't override a high-confidence tuned pattern match.
+    if not best_match.carrier:
+        # Strip extension + common separators so aliases match tokens cleanly
+        stem = re.sub(r"[._\-]+", " ", Path(filename).stem)
+        alias_best: tuple[str, str, int] | None = None  # (carrier_name, alias, count)
+        for carrier_name, carrier_config in store.get_all_carriers().items():
+            # Include the canonical name in the match set — some configs list the
+            # name once and aliases elsewhere; covers both patterns.
+            candidates = [carrier_config.name] + list(carrier_config.aliases)
+            hit = _alias_match_in_text(stem, candidates)
+            if hit and (alias_best is None or hit[1] > alias_best[2]):
+                alias_best = (carrier_name, hit[0], hit[1])
+        if alias_best:
+            best_match = ClassificationResult(
+                carrier=alias_best[0],
+                document_type=None,
+                confidence=ConfidenceLevel.MEDIUM,
+                method="filename_alias",
+            )
 
     # Extract account number from filename if carrier found
     if best_match.carrier:
@@ -214,13 +270,17 @@ def _classify_structured_deep_scan(file_path: str) -> ClassificationResult:
     for carrier_name, carrier_config in store.get_all_carriers().items():
         score = 0
 
-        # Check aliases in cell values (weighted: each distinct alias match = 5 points)
+        # Check aliases in cell values with WORD-BOUNDARY match + min length.
+        # Unbounded substring ("ACC" in "access charge") caused 16 false ACC
+        # Business matches in the NSS bulk upload.
         for alias in carrier_config.aliases:
-            if len(alias) >= 3 and alias.lower() in combined_text:
+            if len(alias) < MIN_ALIAS_LENGTH:
+                continue
+            if re.search(r"\b" + re.escape(alias.lower()) + r"\b", combined_text):
                 score += 5
 
-        # Check carrier display name
-        if carrier_config.name.lower() in combined_text:
+        # Check carrier display name (word-boundary)
+        if re.search(r"\b" + re.escape(carrier_config.name.lower()) + r"\b", combined_text):
             score += 10
 
         # Check account number patterns against cell values
@@ -342,6 +402,22 @@ def classify_by_content(file_path: str) -> ClassificationResult:
         if deep_result.carrier:
             result = deep_result
 
+    # Fallback: alias scan of first-page text (word-boundary, 4+ char aliases).
+    # Covers the 63 registry carriers that don't have first_page_signals defined.
+    # Without this step, non-tuned-carrier PDFs were all landing in Stage C LLM
+    # (with 36% ending up unclassified in bulk uploads).
+    if not result.carrier and text:
+        alias_best: tuple[str, str, int] | None = None
+        for carrier_name, carrier_config in store.get_all_carriers().items():
+            candidates = [carrier_config.name] + list(carrier_config.aliases)
+            hit = _alias_match_in_text(text, candidates)
+            if hit and (alias_best is None or hit[1] > alias_best[2]):
+                alias_best = (carrier_name, hit[0], hit[1])
+        if alias_best:
+            result.carrier = alias_best[0]
+            result.confidence = ConfidenceLevel.MEDIUM
+            result.method = "first_page_alias"
+
     return result
 
 
@@ -389,12 +465,22 @@ Return ONLY the JSON object, no prose.
         response = await gemini.extract(prompt)
         data = _json.loads(response.content)
 
-        carrier_key = data.get("carrier_key")
-        if isinstance(carrier_key, str):
-            # Canonicalize the slug: lowercase, non-alphanumerics -> removed
-            carrier_key = _re.sub(r'[^a-z0-9]', '', carrier_key.lower()) or None
-        else:
-            carrier_key = None
+        # Canonicalize the LLM's carrier guess against our 67-carrier registry.
+        # Without this, "Sinch Message Media" → slug "sinchmessagemedia" became
+        # its own "carrier", fragmented from the registry's "Message Media"
+        # entry. match_carrier_name() normalizes via alias + substring match.
+        from backend.services.carrier_match import match_carrier_name
+        raw_name = data.get("carrier_name")
+        raw_key = data.get("carrier_key")
+        carrier_key: str | None = None
+
+        match = match_carrier_name(raw_name or raw_key)
+        if match and match.is_registered and match.carrier_key:
+            carrier_key = match.carrier_key
+        elif isinstance(raw_key, str):
+            # LLM returned a novel carrier not in the registry — keep the slug
+            # so the generic extraction prompt can still run against it.
+            carrier_key = _re.sub(r'[^a-z0-9]', '', raw_key.lower()) or None
 
         conf_raw = data.get("confidence", "low")
         conf = ConfidenceLevel(conf_raw) if conf_raw in ("high", "medium", "low") else ConfidenceLevel.LOW

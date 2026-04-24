@@ -43,9 +43,28 @@ class RootCause(str, Enum):
 
 # ── Normalization helpers ──
 
-def _to_str(value) -> str:
-    """Normalize any value to a stripped string. Returns '' for None/empty."""
+# Analyst placeholder strings that semantically mean "field not populated in the
+# source document". Our pipeline emits null for these; golden spreadsheets often
+# carry explicit literals. Treat them as equivalent to empty for scoring only —
+# pipeline output is untouched.
+_EMPTY_PLACEHOLDERS = {
+    "not mentioned", "not mention", "not mentioned in document", "na", "n/a",
+    "none", "null", "nil", "-", "--", "---",
+}
+
+
+def _is_empty_placeholder(value) -> bool:
+    """True if the string is a golden-data convention for "no value"."""
     if value is None:
+        return True
+    s = str(value).strip().lower()
+    return not s or s in _EMPTY_PLACEHOLDERS
+
+
+def _to_str(value) -> str:
+    """Normalize any value to a stripped string. Returns '' for None/empty or
+    for analyst-convention placeholder strings like "Not mentioned" / "NA"."""
+    if _is_empty_placeholder(value):
         return ""
     s = str(value).strip()
     # Strip Excel .0 artifact
@@ -134,6 +153,87 @@ _AMOUNT_FIELDS = {"monthly_recurring_cost", "cost_per_unit", "mrc_per_currency",
 _DATE_FIELDS = {"contract_begin_date", "contract_expiration_date"}
 _INT_FIELDS = {"quantity", "num_calls", "contract_term_months"}
 _CARRIER_FIELDS = {"carrier_name"}
+_COMPONENT_NAME_FIELDS = {"component_or_feature_name"}
+
+
+# Common telecom-naming abbreviations that analyst text + doc text disagree on.
+# Used by the component-name comparator to normalize both sides before match.
+_COMPONENT_ABBREVS = {
+    "bus": "business", "busi": "business",
+    "svc": "service", "srv": "service",
+    "mgmt": "management", "mgr": "manager",
+    "intl": "international", "natl": "national",
+    "ctx": "centrex", "cntx": "centrex",
+    "ovc": "overcharge",
+    "unltd": "unlimited", "unlim": "unlimited", "unltmt": "unlimited",
+    "id": "identification", "ident": "identification",
+    "tel": "telephone", "telco": "telephone",
+    "ord": "order",
+    "indiv": "individual", "ind": "individual",
+    "msg": "message", "mesg": "message",
+    "forwd": "forwarding", "fwd": "forwarding",
+    "add": "additional", "addtl": "additional",
+    "assm": "assessment", "asmt": "assessment",
+    "surc": "surcharge",
+    "chg": "charge", "chrg": "charge",
+    "fed": "federal",
+    "univ": "universal",
+    "reg": "regulatory", "regul": "regulatory",
+    "corp": "corporation", "cmty": "community",
+    "co": "co", "comm": "communications",  # keep short forms; already common
+}
+
+
+# Lazy-loaded AT&T USOC code → canonical-name map. Only touched during eval;
+# zero impact on extraction pipeline.
+_USOC_NAME_MAP: dict[str, str] | None = None
+
+
+def _load_usoc_map() -> dict[str, str]:
+    """Load AT&T USOC→name map once, cache for subsequent calls."""
+    global _USOC_NAME_MAP
+    if _USOC_NAME_MAP is not None:
+        return _USOC_NAME_MAP
+    _USOC_NAME_MAP = {}
+    try:
+        import yaml
+        from pathlib import Path
+        path = Path(__file__).parent.parent / "configs" / "carriers" / "att" / "domain_knowledge" / "usoc_codes.yaml"
+        if path.exists():
+            data = yaml.safe_load(path.read_text()) or {}
+            # File is a top-level {CODE: name} mapping
+            _USOC_NAME_MAP = {str(k).upper(): str(v) for k, v in data.items() if v}
+    except Exception:
+        pass
+    return _USOC_NAME_MAP
+
+
+def _normalize_component_name(value) -> str:
+    """Collapse a component name to a comparable form.
+
+    Steps:
+      1. If value is a USOC code (all-caps ≤6 chars), look up canonical name.
+      2. Lowercase, strip non-alphanumeric, split into tokens.
+      3. Expand common abbreviations (bus→business, ctx→centrex, …).
+      4. Re-join as a single alphabetic string for direct compare.
+    """
+    s = _to_str(value)
+    if not s:
+        return ""
+    # USOC passthrough
+    if len(s) <= 6 and s.isupper() and s.isalnum():
+        mapped = _load_usoc_map().get(s.upper())
+        if mapped:
+            s = mapped
+    # Tokenize by any non-alpha run; also split camelCase / PascalCase
+    s = re.sub(r"([a-z])([A-Z])", r"\1 \2", s)  # camelCase boundary
+    tokens = re.split(r"[^a-zA-Z0-9]+", s.lower())
+    expanded: list[str] = []
+    for t in tokens:
+        if not t:
+            continue
+        expanded.append(_COMPONENT_ABBREVS.get(t, t))
+    return "".join(expanded)
 
 
 def compare_field(
@@ -189,8 +289,30 @@ def compare_field(
     if field_name in _CARRIER_FIELDS:
         return _compare_carrier(extracted_val, golden_val)
 
+    if field_name in _COMPONENT_NAME_FIELDS:
+        return _compare_component_name(extracted_val, golden_val)
+
     # Default: case-insensitive string match with containment fallback
     return _compare_string(extracted_val, golden_val)
+
+
+def _compare_component_name(extracted, golden) -> tuple[Score, RootCause | None]:
+    """Compare component/feature names after USOC lookup + abbreviation expansion.
+
+    Handles the CSR↔invoice naming mismatch (e.g., "Business Local Calling
+    Unlimited B" vs "BusLocalCallingUnlimitedB" vs USOC code "1MB").
+    """
+    e_norm = _normalize_component_name(extracted)
+    g_norm = _normalize_component_name(golden)
+    if not e_norm and not g_norm:
+        return Score.BOTH_EMPTY, None
+    if e_norm == g_norm:
+        return Score.CORRECT, None
+    # Substring match after normalization — handles "Three Way Calling" vs
+    # "Three-Way Calling Feature" without needing perfect abbreviation maps.
+    if len(e_norm) > 4 and len(g_norm) > 4 and (e_norm in g_norm or g_norm in e_norm):
+        return Score.PARTIAL, None
+    return Score.WRONG, RootCause.DOMAIN_ERROR
 
 
 def _compare_phone(extracted, golden) -> tuple[Score, RootCause | None]:

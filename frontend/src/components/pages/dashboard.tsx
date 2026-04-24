@@ -5,6 +5,12 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   LayoutDashboard,
   FileText,
   DollarSign,
@@ -213,13 +219,51 @@ export function DashboardPage({ onViewUpload }: DashboardPageProps) {
                 </div>
               </div>
             </div>
-            <div className="flex flex-wrap gap-1.5">
-              {live.carriers.map((c) => (
-                <Badge key={c.key} variant="secondary" className="text-xs text-muted-foreground">
-                  {c.name}
-                </Badge>
-              ))}
-            </div>
+            {/* Cap the visible chips to keep the card compact. Remainder sits
+                behind a +N more tooltip so the full list is still one hover away. */}
+            {(() => {
+              const CARRIER_CHIP_LIMIT = 6;
+              const shown = live.carriers.slice(0, CARRIER_CHIP_LIMIT);
+              const hidden = live.carriers.slice(CARRIER_CHIP_LIMIT);
+              return (
+                <TooltipProvider delay={150}>
+                  <div className="flex flex-wrap gap-1.5">
+                    {shown.map((c) => (
+                      <Badge key={c.key} variant="secondary" className="text-xs text-muted-foreground">
+                        {c.name}
+                      </Badge>
+                    ))}
+                    {hidden.length > 0 && (
+                      <Tooltip>
+                        <TooltipTrigger
+                          aria-label={`Show ${hidden.length} more carriers`}
+                          className="inline-flex items-center rounded-md bg-secondary text-muted-foreground hover:bg-muted/70 px-2 py-0.5 text-xs border border-transparent transition-colors cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/60"
+                        >
+                          +{hidden.length} more
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" className="max-w-sm">
+                          <div className="text-xs">
+                            <div className="font-medium mb-1">
+                              {hidden.length} more carrier{hidden.length === 1 ? "" : "s"}
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                              {hidden.map((c) => (
+                                <span
+                                  key={c.key}
+                                  className="px-1.5 py-0.5 rounded bg-muted/70 whitespace-nowrap"
+                                >
+                                  {c.name}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
+                  </div>
+                </TooltipProvider>
+              );
+            })()}
           </Card>
         </div>
       )}
