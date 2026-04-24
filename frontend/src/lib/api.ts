@@ -173,6 +173,44 @@ export async function apiListCarriers(): Promise<{ carriers: CarrierInfo[] }> {
   return apiFetch("/api/carriers");
 }
 
+// ============================================
+// Clients API (§2.1 per-client master-data)
+// ============================================
+export interface ClientSummary {
+  id: string;
+  name: string;
+  notes: string | null;
+  project_count: number;
+  reference_data_count: number;
+}
+
+export interface ClientReferenceData {
+  id: string;
+  kind: string;
+  carrier: string | null;
+  account_number: string | null;
+  key_fields: Record<string, unknown>;
+  values: Record<string, unknown>;
+  source: string | null;
+  confirmed_by: string | null;
+  confirmed_at: string | null;
+}
+
+export interface ClientDetail {
+  id: string;
+  name: string;
+  notes: string | null;
+  reference_data: ClientReferenceData[];
+}
+
+export async function apiListClients(): Promise<{ clients: ClientSummary[] }> {
+  return apiFetch("/api/clients");
+}
+
+export async function apiGetClient(clientId: string): Promise<ClientDetail> {
+  return apiFetch(`/api/clients/${clientId}`);
+}
+
 // Dashboard stats
 export interface DashboardStats {
   extraction_runs: {

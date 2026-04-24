@@ -15,6 +15,7 @@ import {
   ChevronLeft,
   Command,
   Trash2,
+  Users,
   Wallet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -25,7 +26,7 @@ import { apiGetSpend, type SpendStatus } from "@/lib/api";
 
 import { Table2 } from "lucide-react";
 
-export type Page = "dashboard" | "upload" | "results" | "review" | "analytics" | "bin" | "settings";
+export type Page = "dashboard" | "upload" | "results" | "review" | "analytics" | "clients" | "bin" | "settings";
 
 const navItems: { id: Page; label: string; icon: React.ElementType }[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -33,6 +34,7 @@ const navItems: { id: Page; label: string; icon: React.ElementType }[] = [
   // Results doubles as the review/inspection surface — users click a row to review it in context.
   { id: "results", label: "Results", icon: Table2 },
   { id: "analytics", label: "Analytics", icon: BarChart3 },
+  { id: "clients", label: "Clients", icon: Users },
   { id: "bin", label: "Bin", icon: Trash2 },
   { id: "settings", label: "Settings", icon: Settings },
 ];

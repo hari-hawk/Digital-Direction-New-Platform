@@ -11,6 +11,7 @@ import { ResultsPage } from "@/components/pages/results";
 import { ReviewPage } from "@/components/pages/review";
 import { AnalyticsPage } from "@/components/pages/analytics";
 import { BinPage } from "@/components/pages/bin";
+import { ClientsPage } from "@/components/pages/clients";
 import { SettingsPage } from "@/components/pages/settings";
 
 function AppContent() {
@@ -45,6 +46,8 @@ function AppContent() {
             return <ReviewPage onBack={() => navigate("results")} />;
           case "analytics":
             return <AnalyticsPage />;
+          case "clients":
+            return <ClientsPage />;
           case "bin":
             return <BinPage />;
           case "settings":
