@@ -268,6 +268,34 @@ async def submit_correction(
         logger.warning(f"Failed to generate correction embedding: {e}")
         # Non-fatal — correction is saved, pgvector fallback degraded
 
+    # §2.1 Master-data writeback — for location/identity/contract fields, save
+    # the analyst-confirmed value into the client's reference-data store so
+    # future uploads for the same client inherit it. No-op when no client is
+    # linked to the upload (legacy rows).
+    try:
+        # Resolve client_id via the upload Redis state (upload_id is on the run)
+        client_id = None
+        if row.upload_id:
+            from backend.api.uploads import _get_upload as _get_up
+            up = _get_up(str(row.upload_id))
+            client_id = up.get("client_id") if up else None
+        if client_id:
+            from backend.services.master_data import store_correction_to_master_data
+            def _store(sync_session):
+                return store_correction_to_master_data(
+                    sync_session,
+                    client_id=client_id,
+                    row=row,
+                    field_name=correction.field_name,
+                    corrected_value=correction.corrected_value,
+                    confirmed_by="analyst",
+                )
+            wrote = await db.run_sync(_store)
+            if wrote:
+                await db.commit()
+    except Exception as e:
+        logger.warning(f"master-data writeback skipped: {e}")
+
     return {
         "row_id": row_id,
         "correction_id": str(corr.id),

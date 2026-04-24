@@ -447,11 +447,27 @@ async def classify_upload(
         _classify_one(name, path, size) for name, path, size in file_data
     ])
 
+    # Client linkage (§2.1): if a client_name was provided, find-or-create the
+    # Client row and stash its id in Redis. The merger consults client_id to
+    # pull master-data. Empty client_name → no linkage, pipeline behaves as-is.
+    client_id: str | None = None
+    if client_name and client_name.strip():
+        try:
+            from backend.api.clients import find_or_create_client
+            async with async_session() as session:
+                async with session.begin():
+                    client = await find_or_create_client(client_name, session)
+                    if client:
+                        client_id = str(client.id)
+        except Exception as e:
+            logger.warning(f"Client find-or-create failed for {client_name!r}: {e}")
+
     # Store upload state in Redis
     from datetime import datetime, timezone
     _save_upload(upload_id, {
         "project_name": project_name,
         "client_name": client_name,
+        "client_id": client_id,
         "description": description,
         "files": saved_files,
         "classified": [c.model_dump() for c in classified],
@@ -834,6 +850,24 @@ async def _run_merge(upload_id: str):
                 all_merged.append(row_dict)
 
         logger.info(f"Merge complete: {len(results)} rows → {len(all_merged)} merged rows ({total_conflicts} conflicts resolved)")
+
+        # §2.1 Master-data overrides — analyst-confirmed values win over
+        # extracted/merged values for this client. No-op when the client has
+        # no reference-data entries (day-one state).
+        try:
+            client_id = upload.get("client_id")
+            if client_id:
+                from backend.services.master_data import apply_master_data_overrides
+                from backend.models.database import async_session as _async_session
+                async with _async_session() as s:
+                    # apply_master_data_overrides is sync; use sync-adapter via run_sync
+                    def _apply(sync_session):
+                        return apply_master_data_overrides(all_merged, client_id, sync_session)
+                    _, n = await s.run_sync(_apply)
+                    if n:
+                        logger.info(f"master-data: {n} field overrides applied for client {client_id}")
+        except Exception as e:
+            logger.warning(f"master-data overrides skipped: {e}")
 
         # Post-merge validation + compliance — auto-run every time.
         # Validator re-checks format / cross-field math on merged rows.
