@@ -22,12 +22,58 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from backend.models.database import Base
 
 
+class Client(Base):
+    """Customer — one per end-client organization. A client has many projects
+    (uploads). Added Apr-2026 for the per-client master-data store (§2.1).
+    Nullable from the Upload side so legacy uploads without a linked client
+    continue to work without migration."""
+    __tablename__ = "clients"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    uploads: Mapped[list["Upload"]] = relationship(back_populates="client")
+    reference_data: Mapped[list["ClientReferenceData"]] = relationship(
+        back_populates="client", cascade="all, delete-orphan"
+    )
+
+
+class ClientReferenceData(Base):
+    """Analyst-confirmed authoritative facts scoped to one client. Populated
+    organically from corrections + contract uploads — not pre-seeded. Consulted
+    by the merger at priority 15 (above CSR=10). Empty by default; pipeline
+    falls through to the existing priority matrix when no entries exist."""
+    __tablename__ = "client_reference_data"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    client_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("clients.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(50), nullable=False)
+    carrier: Mapped[str | None] = mapped_column(String(100))
+    account_number: Mapped[str | None] = mapped_column(String(100))
+    key_fields: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    values: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    source: Mapped[str | None] = mapped_column(String(50))
+    confirmed_by: Mapped[str | None] = mapped_column(String(255))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    client: Mapped["Client"] = relationship(back_populates="reference_data")
+
+
 class Upload(Base):
     __tablename__ = "uploads"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str | None] = mapped_column(String(255))
-    client_name: Mapped[str | None] = mapped_column(String(255))
+    client_name: Mapped[str | None] = mapped_column(String(255))  # free text, kept for backward compat
+    client_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("clients.id", ondelete="SET NULL"), nullable=True
+    )
     uploaded_by: Mapped[str | None] = mapped_column(String(255))
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     status: Mapped[str] = mapped_column(String(50), default="pending")
@@ -40,6 +86,7 @@ class Upload(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
     # Relationships
+    client: Mapped["Client | None"] = relationship(back_populates="uploads")
     documents: Mapped[list["Document"]] = relationship(back_populates="upload", cascade="all, delete-orphan")
     extraction_runs: Mapped[list["ExtractionRun"]] = relationship(back_populates="upload", cascade="all, delete-orphan")
     extracted_rows: Mapped[list["ExtractedRow"]] = relationship(back_populates="upload", cascade="all, delete-orphan")

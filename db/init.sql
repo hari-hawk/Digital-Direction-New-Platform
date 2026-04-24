@@ -9,10 +9,25 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- CORE TABLES
 -- ============================================
 
+-- ============================================
+-- Clients — one per customer. A client can have many projects (uploads).
+-- Added in Apr-2026 as the foundation for per-client master-data (§2.1).
+-- Additive: client_id on uploads is nullable so the existing pipeline runs
+-- unchanged when no client is set.
+-- ============================================
+CREATE TABLE clients (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(255) NOT NULL UNIQUE,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
 CREATE TABLE uploads (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(255),
-    client_name VARCHAR(255),
+    client_name VARCHAR(255),         -- kept as free text for backward compat
+    client_id UUID REFERENCES clients(id) ON DELETE SET NULL,
     uploaded_by VARCHAR(255),
     uploaded_at TIMESTAMP DEFAULT NOW(),
     status VARCHAR(50) DEFAULT 'pending',
@@ -25,6 +40,30 @@ CREATE TABLE uploads (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX idx_uploads_deleted_at ON uploads(deleted_at);
+CREATE INDEX idx_uploads_client ON uploads(client_id);
+
+-- ============================================
+-- Client reference data — analyst-confirmed authoritative facts per client.
+-- Populated organically from corrections + contract uploads (not pre-seeded).
+-- Consulted by the merger at priority 15 (higher than CSR=10).
+-- Empty by default; pipeline falls through to today's CSR→contract→invoice
+-- priority when no entries exist for the client.
+-- ============================================
+CREATE TABLE client_reference_data (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    kind VARCHAR(50) NOT NULL,             -- 'address' | 'account_alias' | 'circuit' | 'contract_term'
+    carrier VARCHAR(100),                  -- scope to a carrier when applicable
+    account_number VARCHAR(100),
+    key_fields JSONB NOT NULL,             -- what this entry identifies
+    values JSONB NOT NULL,                 -- the authoritative values
+    source VARCHAR(50),                    -- 'analyst_correction' | 'contract_upload' | 'learned'
+    confirmed_by VARCHAR(255),
+    confirmed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX idx_crd_client_kind ON client_reference_data (client_id, kind);
+CREATE INDEX idx_crd_account ON client_reference_data (account_number);
 
 CREATE TABLE documents (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

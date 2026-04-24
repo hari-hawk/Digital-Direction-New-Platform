@@ -36,6 +36,7 @@ from backend.api.exports import router as exports_router
 from backend.api.carriers import router as carriers_router
 from backend.api.dashboard import router as dashboard_router
 from backend.api.analytics import router as analytics_router
+from backend.api.clients import router as clients_router
 
 app.include_router(uploads_router)
 app.include_router(review_router)
@@ -43,6 +44,7 @@ app.include_router(exports_router)
 app.include_router(carriers_router)
 app.include_router(dashboard_router)
 app.include_router(analytics_router)
+app.include_router(clients_router)
 
 
 @app.get("/health")
