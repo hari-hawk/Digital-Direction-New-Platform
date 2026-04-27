@@ -228,13 +228,42 @@ export function AppShell({ children }: AppShellProps) {
                             style={{ width: `${Math.min(spend.pct_used, 100)}%` }}
                           />
                         </div>
+                        {/* Per-backend breakdown — only render when at least one backend has spend */}
+                        {spend.by_backend && Object.values(spend.by_backend).some((v) => v > 0) && (
+                          <div className="mt-1.5 flex items-center gap-1.5 text-[9px] tabular-nums">
+                            {Object.entries(spend.by_backend)
+                              .filter(([, v]) => v > 0)
+                              .sort(([, a], [, b]) => b - a)
+                              .map(([backend, amt]) => {
+                                const colorMap: Record<string, string> = {
+                                  vertex: "text-sky-400",
+                                  aistudio: "text-emerald-400",
+                                  anthropic: "text-violet-400",
+                                };
+                                const tone = colorMap[backend] || "text-muted-foreground";
+                                return (
+                                  <span key={backend} className={tone} title={`${backend}: $${amt.toFixed(4)}`}>
+                                    {backend.slice(0, 3)} ${amt.toFixed(2)}
+                                  </span>
+                                );
+                              })}
+                          </div>
+                        )}
                       </motion.div>
                     )}
                   </AnimatePresence>
                 </TooltipTrigger>
                 {collapsed && (
                   <TooltipContent side="right">
-                    LLM spend: ${spend.total_usd.toFixed(2)} of ${spend.cap_usd.toFixed(0)}
+                    <div className="text-xs space-y-1">
+                      <div>LLM spend: ${spend.total_usd.toFixed(2)} of ${spend.cap_usd.toFixed(0)}</div>
+                      {spend.by_backend && Object.entries(spend.by_backend).filter(([, v]) => v > 0).map(([k, v]) => (
+                        <div key={k} className="text-muted-foreground">{k}: ${v.toFixed(4)}</div>
+                      ))}
+                      {spend.routing_mode && (
+                        <div className="text-muted-foreground italic">routing: {spend.routing_mode}</div>
+                      )}
+                    </div>
                   </TooltipContent>
                 )}
               </Tooltip>

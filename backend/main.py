@@ -54,8 +54,9 @@ async def health():
 
 @app.get("/api/spend")
 async def spend():
-    from backend.services.spend_ledger import current_total
+    from backend.services.spend_ledger import current_total, current_by_backend
     total = current_total()
+    by_backend = current_by_backend()
     cap = settings.max_spend_usd
     return {
         "total_usd": round(total, 4),
@@ -63,4 +64,6 @@ async def spend():
         "remaining_usd": round(max(cap - total, 0.0), 4) if cap > 0 else None,
         "pct_used": round((total / cap * 100) if cap > 0 else 0.0, 2),
         "warn_at_pct": int(settings.spend_warn_pct * 100),
+        "by_backend": {k: round(v, 4) for k, v in by_backend.items()},
+        "routing_mode": settings.llm_backend,
     }

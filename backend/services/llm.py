@@ -96,6 +96,7 @@ class LLMResponse:
     output_tokens: int = 0
     latency_ms: int = 0
     raw_response: Any = None
+    backend: str = ""  # 'vertex' | 'aistudio' | 'anthropic' — which provider served this call
 
     @property
     def estimated_cost_usd(self) -> float:
@@ -107,24 +108,94 @@ class LLMResponse:
 
 
 class GeminiClient:
+    """Dual-backend Gemini client with auto-routing.
+
+    Holds two underlying genai.Client instances when both Vertex and AI Studio
+    are configured. Per-call routing picks the best backend based on:
+      - Multimodal calls → Vertex (better PDF reliability)
+      - Pro model       → Vertex (Pro on AI Studio is heavily rate-limited)
+      - Spend ≥ cap*pct → Vertex (preserve AI Studio quota for emergencies)
+      - Otherwise (Flash) → AI Studio first, automatic failover to Vertex on 429/503
+
+    Setting `LLM_BACKEND=vertex` or `LLM_BACKEND=aistudio` forces a single
+    backend (legacy behavior).
+    """
+
     def __init__(self, max_concurrent: int | None = None, retry_delays: list[int] | None = None):
-        if settings.llm_backend == "vertex":
-            if not settings.gcp_project_id:
-                raise RuntimeError(
-                    "llm_backend=vertex requires GCP_PROJECT_ID. "
-                    "Run `gcloud auth application-default login` and set GCP_PROJECT_ID in .env."
-                )
-            self._client = genai.Client(
+        self._vertex_client: Any = self._build_vertex()
+        self._aistudio_client: Any = self._build_aistudio()
+        if not self._vertex_client and not self._aistudio_client:
+            raise RuntimeError(
+                "No Gemini backend configured. Set GEMINI_API_KEY for AI Studio, "
+                "or run `gcloud auth application-default login` + set GCP_PROJECT_ID for Vertex."
+            )
+        backends = []
+        if self._aistudio_client: backends.append("aistudio")
+        if self._vertex_client: backends.append("vertex")
+        logger.info(f"Gemini backends available: {backends} (mode={settings.llm_backend})")
+        # Whichever is available becomes the default `_client` for embed() etc.
+        self._client = self._aistudio_client or self._vertex_client
+        self._semaphore = asyncio.Semaphore(max_concurrent or settings.gemini_max_concurrent)
+        self._retry_delays = retry_delays or settings.llm_retry_delays
+
+    @staticmethod
+    def _build_vertex():
+        """Return a Vertex client, or None if not configured."""
+        if not settings.gcp_project_id:
+            return None
+        try:
+            return genai.Client(
                 vertexai=True,
                 project=settings.gcp_project_id,
                 location=settings.gcp_region,
             )
-            logger.info(f"Gemini backend: Vertex AI ({settings.gcp_project_id}/{settings.gcp_region})")
-        else:
-            self._client = genai.Client(api_key=settings.gemini_api_key)
-            logger.info("Gemini backend: AI Studio (api key)")
-        self._semaphore = asyncio.Semaphore(max_concurrent or settings.gemini_max_concurrent)
-        self._retry_delays = retry_delays or settings.llm_retry_delays
+        except Exception as e:
+            logger.warning(f"Vertex client init failed: {e}")
+            return None
+
+    @staticmethod
+    def _build_aistudio():
+        """Return an AI Studio client, or None if no API key."""
+        if not settings.gemini_api_key:
+            return None
+        try:
+            return genai.Client(api_key=settings.gemini_api_key)
+        except Exception as e:
+            logger.warning(f"AI Studio client init failed: {e}")
+            return None
+
+    def _choose_backend(self, model: str, multimodal: bool = False) -> str:
+        """Decide which backend to use for this call. Returns 'vertex' or 'aistudio'."""
+        # Explicit override
+        if settings.llm_backend == "vertex" and self._vertex_client:
+            return "vertex"
+        if settings.llm_backend == "aistudio" and self._aistudio_client:
+            return "aistudio"
+
+        # Auto routing
+        # Rule 1: multimodal calls always go to Vertex (file uploads scoped per backend,
+        # Vertex is more reliable for large file processing)
+        if multimodal:
+            return "vertex" if self._vertex_client else "aistudio"
+        # Rule 2: Pro model → Vertex (AI Studio Pro quotas are tight)
+        if "pro" in model.lower() and self._vertex_client:
+            return "vertex"
+        # Rule 3: spend pressure → preserve AI Studio quota by leaning on Vertex
+        try:
+            from backend.services.spend_ledger import current_total
+            cap = settings.max_spend_usd
+            if cap > 0:
+                pct = current_total() / cap
+                if pct >= settings.auto_route_vertex_above_pct and self._vertex_client:
+                    return "vertex"
+        except Exception:
+            pass  # spend lookup is best-effort
+        # Default: AI Studio for Flash (free-tier-friendly, identical token price)
+        return "aistudio" if self._aistudio_client else "vertex"
+
+    def _client_for(self, backend: str):
+        """Return the underlying genai.Client for the named backend."""
+        return self._aistudio_client if backend == "aistudio" else self._vertex_client
 
     async def extract(
         self,
@@ -159,6 +230,9 @@ class GeminiClient:
         self, prompt: str, model: str, temperature: float, response_mime_type: str
     ) -> LLMResponse:
         last_error = None
+        backend = self._choose_backend(model, multimodal=False)
+        already_failed_over = False
+
         for attempt, delay in enumerate(self._retry_delays):
             try:
                 start = time.monotonic()
@@ -180,7 +254,8 @@ class GeminiClient:
                 if "flash" in model.lower():
                     config_kwargs["thinking_config"] = genai_types.ThinkingConfig(thinking_budget=0)
 
-                stream = await self._client.aio.models.generate_content_stream(
+                client = self._client_for(backend)
+                stream = await client.aio.models.generate_content_stream(
                     model=model,
                     contents=prompt,
                     config=genai_types.GenerateContentConfig(**config_kwargs),
@@ -197,24 +272,41 @@ class GeminiClient:
                 content = "".join(chunks)
 
                 _trace_llm_call(model, prompt[:500], content[:500],
-                                input_tokens, output_tokens, latency, "extraction")
+                                input_tokens, output_tokens, latency, f"extraction_{backend}")
                 resp = LLMResponse(
                     content=content,
                     model=model,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     latency_ms=latency,
+                    backend=backend,
                 )
-                record_spend(resp.estimated_cost_usd)
+                record_spend(resp.estimated_cost_usd, backend=backend)
                 return resp
             except Exception as e:
                 last_error = e
                 err_str = str(e)
                 is_retryable = ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str
                                 or "503" in err_str or "UNAVAILABLE" in err_str)
+
+                # Auto-failover: on the first retryable error, swap to the other
+                # backend (if available + we haven't already swapped). After the
+                # swap, fall through to the normal backoff retry loop on the new
+                # backend. This is the killer feature of `auto` mode.
+                if is_retryable and not already_failed_over and settings.llm_backend == "auto":
+                    other = "vertex" if backend == "aistudio" else "aistudio"
+                    if self._client_for(other):
+                        logger.warning(
+                            f"{backend} returned retryable error ({err_str[:80]}), "
+                            f"failing over to {other}"
+                        )
+                        backend = other
+                        already_failed_over = True
+                        continue  # immediate retry on new backend, no backoff
+
                 if is_retryable:
                     wait = delay + (attempt * 2)
-                    logger.warning(f"Gemini retryable error (attempt {attempt+1}/{len(self._retry_delays)}), waiting {wait}s: {err_str[:100]}")
+                    logger.warning(f"Gemini ({backend}) retryable error (attempt {attempt+1}/{len(self._retry_delays)}), waiting {wait}s: {err_str[:100]}")
                     await asyncio.sleep(wait)
                     continue
                 if attempt < len(self._retry_delays) - 1:
@@ -227,11 +319,16 @@ class GeminiClient:
         self, prompt: str, pdf_path: str, model: str, temperature: float
     ) -> LLMResponse:
         last_error = None
+        # Multimodal stays on one backend for the whole call (file upload is
+        # scoped to the backend that received it). _choose_backend picks Vertex
+        # when available — better PDF reliability + larger upload limits.
+        backend = self._choose_backend(model, multimodal=True)
+        client = self._client_for(backend)
         for attempt, delay in enumerate(self._retry_delays):
             try:
                 start = time.monotonic()
-                uploaded = await asyncio.to_thread(self._client.files.upload, file=pdf_path)
-                response = await self._client.aio.models.generate_content(
+                uploaded = await asyncio.to_thread(client.files.upload, file=pdf_path)
+                response = await client.aio.models.generate_content(
                     model=model,
                     contents=[prompt, uploaded],
                     config=genai_types.GenerateContentConfig(temperature=temperature),
@@ -246,8 +343,9 @@ class GeminiClient:
                     output_tokens=getattr(usage, "candidates_token_count", 0) or 0,
                     latency_ms=latency,
                     raw_response=response,
+                    backend=backend,
                 )
-                record_spend(resp.estimated_cost_usd)
+                record_spend(resp.estimated_cost_usd, backend=backend)
                 return resp
             except Exception as e:
                 last_error = e
@@ -312,8 +410,9 @@ class ClaudeClient:
                     output_tokens=response.usage.output_tokens,
                     latency_ms=latency,
                     raw_response=response,
+                    backend="anthropic",
                 )
-                record_spend(resp.estimated_cost_usd)
+                record_spend(resp.estimated_cost_usd, backend="anthropic")
                 return resp
             except Exception as e:
                 last_error = e

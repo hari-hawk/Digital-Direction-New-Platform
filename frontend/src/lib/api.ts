@@ -114,6 +114,8 @@ export interface SpendStatus {
   remaining_usd: number | null;
   pct_used: number;
   warn_at_pct: number;
+  by_backend?: Record<string, number>;  // 'vertex' | 'aistudio' | 'anthropic' → $
+  routing_mode?: string;                // 'auto' | 'vertex' | 'aistudio'
 }
 
 export async function apiGetSpend(): Promise<SpendStatus> {

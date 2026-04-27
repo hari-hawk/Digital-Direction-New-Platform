@@ -16,11 +16,18 @@ class Settings(BaseSettings):
     gcs_bucket_name: str = ""
 
     # LLM — Backend selection
-    # "aistudio" uses GEMINI_API_KEY (default, simple, rate-limited shared capacity)
-    # "vertex" uses Vertex AI with ADC (better 503/reliability, needs GCP project + billing)
-    llm_backend: str = "aistudio"
+    # Three modes:
+    #   "auto"     → smart routing (default). Multimodal + Pro → Vertex; Flash → AI Studio
+    #                first, with auto-failover to Vertex on 429/503; switches to Vertex
+    #                when cumulative spend ≥ 80% of cap to preserve AI Studio quota.
+    #   "vertex"   → always Vertex (legacy behavior, requires GCP_PROJECT_ID).
+    #   "aistudio" → always AI Studio (requires GEMINI_API_KEY).
+    llm_backend: str = "auto"
     gcp_project_id: str = ""
     gcp_region: str = "us-central1"
+    # Threshold (0.0–1.0) above which auto-routing prefers Vertex even for Flash
+    # to preserve AI Studio quota. Default 80% matches the spend-warn threshold.
+    auto_route_vertex_above_pct: float = 0.8
 
     # LLM — Models (override via env to switch models without code change)
     gemini_api_key: str = ""
