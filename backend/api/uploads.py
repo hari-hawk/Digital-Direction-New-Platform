@@ -46,11 +46,18 @@ def _upload_key(upload_id: str) -> str:
 
 
 def _save_upload(upload_id: str, data: dict) -> None:
-    """Save upload state to Redis. Results stored separately to keep hash small."""
+    """Save upload state to Redis. Results stored separately to keep hash small.
+
+    NO TTL — upload state is small (a few KB per project) and persists
+    indefinitely. Earlier 24h TTL caused project_name + client_name to silently
+    disappear after a day, with the disk-folder bootstrap then recreating the
+    Redis entry with empty names. Cleanup happens via the Bin (soft-delete →
+    purge), not via expiry.
+    """
     r = _get_redis()
     results = data.pop("results", [])
-    r.set(_upload_key(upload_id), json.dumps(data), ex=86400)  # 24h TTL
-    r.set(f"{_upload_key(upload_id)}:results", json.dumps(results), ex=86400)
+    r.set(_upload_key(upload_id), json.dumps(data))
+    r.set(f"{_upload_key(upload_id)}:results", json.dumps(results))
     # Track in uploads index
     r.sadd("dd:uploads", upload_id)
 
@@ -85,13 +92,13 @@ def _update_upload_field(upload_id: str, **fields) -> None:
         return
     data = json.loads(raw)
     data.update(fields)
-    r.set(_upload_key(upload_id), json.dumps(data), ex=86400)
+    r.set(_upload_key(upload_id), json.dumps(data))  # no TTL — persist indefinitely
 
 
 def _update_upload_results(upload_id: str, results: list) -> None:
     """Update just the results list."""
     r = _get_redis()
-    r.set(f"{_upload_key(upload_id)}:results", json.dumps(results), ex=86400)
+    r.set(f"{_upload_key(upload_id)}:results", json.dumps(results))  # no TTL — persist indefinitely
 
 
 def _list_uploads(include_deleted: bool = False, only_deleted: bool = False) -> list[dict]:
@@ -764,7 +771,7 @@ async def _run_merge(upload_id: str):
 
         # Save raw results before merge (so user can toggle back)
         r = _get_redis()
-        r.set(f"{_upload_key(upload_id)}:results:raw", json.dumps(results), ex=86400)
+        r.set(f"{_upload_key(upload_id)}:results:raw", json.dumps(results))  # no TTL — persist indefinitely
 
         # Build doc_type lookup from file_assignments
         doc_type_map = {}
@@ -953,7 +960,7 @@ def detect_stuck_extractions():
             if data.get("status") in ("extracting", "cancel_requested"):
                 logger.warning(f"Upload {uid} was stuck in '{data['status']}', marking as interrupted")
                 data["status"] = "interrupted"
-                r.set(_upload_key(uid), json.dumps(data), ex=86400)
+                r.set(_upload_key(uid), json.dumps(data))  # no TTL — persist indefinitely
     except Exception as e:
         logger.error(f"Failed to detect stuck extractions: {e}")
 
