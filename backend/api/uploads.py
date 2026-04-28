@@ -43,6 +43,85 @@ logger = logging.getLogger(__name__)
 # ============================================
 
 
+# Account-level fields that propagate within a carrier_account_number group.
+# Mirrors backend/pipeline/merger.py::_ACCOUNT_LEVEL_FIELDS — kept in sync
+# manually because the extraction path uses dicts (post-merge uses ORM).
+_ACCOUNT_LEVEL_FIELDS_DICT = (
+    "billing_name", "service_address_1", "service_address_2",
+    "city", "state", "zip", "country",
+    "carrier_name", "master_account", "carrier_account_number",
+    "invoice_file_name", "contract_file_name", "currency",
+    "contract_term_months", "contract_begin_date", "contract_expiration_date",
+    "contract_number", "contract_number_2",
+    "currently_month_to_month", "mtm_or_less_than_year",
+    "billing_per_contract", "auto_renew", "auto_renewal_notes",
+    "contract_info_received",
+)
+
+
+def _propagate_account_level_fields_in_dicts(rows: list[dict]) -> None:
+    """Fill account-level fields from any row that has them to rows that don't.
+
+    Groups rows by carrier_account_number. For each group, picks the
+    first non-empty value for each account-level field and back-fills
+    blanks. Also derives `country` from a US/Canadian zip pattern when
+    `country` is blank — purely structural, no hardcoded client data.
+    Mutates rows in place.
+    """
+    if not rows:
+        return
+    from collections import defaultdict
+
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        # Normalize: strip + lower so "12345" and " 12345 " group together.
+        # Empty account_number rows form their own group ("") — those usually
+        # are document-level summaries and won't propagate cross-document.
+        key = (r.get("carrier_account_number") or "").strip()
+        groups[key].append(r)
+
+    filled = 0
+    for key, group in groups.items():
+        if len(group) <= 1 and key == "":
+            continue
+        best: dict[str, object] = {}
+        for field in _ACCOUNT_LEVEL_FIELDS_DICT:
+            for r in group:
+                v = r.get(field)
+                if v is not None and str(v).strip() != "":
+                    best[field] = v
+                    break
+        for r in group:
+            for field, value in best.items():
+                cur = r.get(field)
+                if cur is None or (isinstance(cur, str) and cur.strip() == ""):
+                    r[field] = value
+                    filled += 1
+
+    # Derive country from zip (US 5-digit, Canadian alphanumeric)
+    derived = 0
+    import re as _re
+    for r in rows:
+        if r.get("country"):
+            continue
+        z = (r.get("zip") or "").strip()
+        if not z:
+            continue
+        if _re.match(r"^\d{5}(-\d{4})?$", z):
+            r["country"] = "USA"
+            derived += 1
+        elif _re.match(r"^[A-Za-z]\d[A-Za-z][\s-]?\d[A-Za-z]\d$", z):
+            r["country"] = "CAN"
+            derived += 1
+
+    if filled or derived:
+        logger.info(
+            "Extraction propagation: filled %d account-level fields, "
+            "derived %d countries from zip",
+            filled, derived,
+        )
+
+
 async def _save_upload(upload_id: str, data: dict) -> None:
     """Insert (or upsert) the upload row keyed by short_id."""
     await us.save_upload(upload_id, data)
@@ -800,6 +879,41 @@ async def _run_merge(upload_id: str):
 
         logger.info(f"Merge complete: {len(results)} rows → {len(all_merged)} merged rows ({total_conflicts} conflicts resolved)")
 
+        # Auto-fill contract_info_received based on what was uploaded for
+        # this project. Customer asked for this so the inventory column
+        # reflects whether contracts exist on file:
+        #   "Yes"   → at least one file in the upload had doc_type=contract
+        #   "Email" → only email/.msg/.eml present (info came from a message)
+        #   "No"    → only invoices/CSRs/reports (no contract on file)
+        # Per-row override is preserved when the LLM already extracted a
+        # specific value (e.g. "Pending from carrier"); we only fill blanks.
+        try:
+            doc_types = {(fa.get("doc_type") or "").lower() for fa in file_assignments}
+            filenames = [(fa.get("filename") or "") for fa in file_assignments]
+            has_contract_doc = "contract" in doc_types
+            has_email = ("email" in doc_types) or any(
+                fn.lower().endswith((".msg", ".eml")) for fn in filenames
+            )
+            if has_contract_doc:
+                cir_default = "Yes"
+            elif has_email:
+                cir_default = "Email"
+            else:
+                cir_default = "No"
+            cir_filled = 0
+            for rd in all_merged:
+                if not (rd.get("contract_info_received") or "").strip():
+                    rd["contract_info_received"] = cir_default
+                    cir_filled += 1
+            if cir_filled:
+                logger.info(
+                    "contract_info_received auto-filled '%s' on %d rows "
+                    "(based on uploaded doc types: %s)",
+                    cir_default, cir_filled, sorted(doc_types - {""}),
+                )
+        except Exception as e:
+            logger.warning("contract_info_received auto-fill skipped: %s", e)
+
         # §2.1 Master-data overrides — analyst-confirmed values win over
         # extracted/merged values for this client. No-op when the client has
         # no reference-data entries (day-one state).
@@ -1068,6 +1182,41 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
             r["carrier_name"] = match.canonical_name
             canonical_names.add(match.canonical_name)
         computed_carriers = sorted(n for n in canonical_names if n.lower() != "unknown")
+
+        # Step 3: account-level field propagation + zip→country derivation +
+        # contract_info_received auto-fill. Runs at extraction time so users
+        # who don't run the cross-doc merger still get a fully-populated
+        # inventory (every row of an account carries billing_name, address,
+        # contract terms, etc., not just the first S row).
+        try:
+            _propagate_account_level_fields_in_dicts(all_rows)
+        except Exception as e:
+            logger.warning("account-level propagation skipped: %s", e)
+        try:
+            doc_types = {(fa.get("doc_type") or "").lower() for fa in file_assignments}
+            filenames = [(fa.get("filename") or "") for fa in file_assignments]
+            has_contract_doc = "contract" in doc_types
+            has_email = ("email" in doc_types) or any(
+                fn.lower().endswith((".msg", ".eml")) for fn in filenames
+            )
+            if has_contract_doc:
+                cir_default = "Yes"
+            elif has_email:
+                cir_default = "Email"
+            else:
+                cir_default = "No"
+            cir_filled = 0
+            for r in all_rows:
+                if not (r.get("contract_info_received") or "").strip():
+                    r["contract_info_received"] = cir_default
+                    cir_filled += 1
+            if cir_filled:
+                logger.info(
+                    "contract_info_received auto-filled '%s' on %d rows (doc types: %s)",
+                    cir_default, cir_filled, sorted(doc_types - {""}),
+                )
+        except Exception as e:
+            logger.warning("contract_info_received auto-fill skipped: %s", e)
         # needs_validation_count is now always 0 — auto-register closes the loop.
         # Kept as a field for backward compat with the API contract.
         needs_validation_count = 0

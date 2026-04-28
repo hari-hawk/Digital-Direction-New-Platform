@@ -42,17 +42,32 @@ WHAT NOT TO EXTRACT:
 - Carrier-side helpline/support phone numbers — these are not customer phone_number values.
 - Marketing notices, upgrade offers, page footers.
 
-SECTION AND DOCUMENT TOTALS (ALSO EXTRACT):
-In addition to the per-line items above, capture each explicitly-labeled "Total …" line that aggregates a section or the whole bill. These sit alongside — not in place of — the individual item rows.
+SECTION AND DOCUMENT TOTALS / SUBTOTALS (ALSO EXTRACT):
+In addition to the per-line items above, capture EVERY explicitly-labeled aggregate / category-header / subtotal / total line that appears on the bill. These sit alongside — not in place of — the individual item rows.
 
-Emit each total as its own output row with:
+Carriers use different label conventions. Capture all of these patterns when you see them — do not require the literal word "Total":
+- "Total …" — any line starting with "Total" (Total Monthly Service, Total Current Charges, Total Amount Due, Total Plans and Services, Total Company Fees and Surcharges, Total Government Fees and Taxes, Total Billed for 614-555-1234, etc.)
+- "Subtotal", "Sub Total", "Sub-Total" — with or without a qualifier ("Current Charges Subtotal", "Previous Statement Balance Subtotal", "Tax Subtotal")
+- Section/category headers that AGGREGATE the items shown beneath them — even when the word "Total" is absent. Examples seen across carriers:
+    - "Recurring Charges" $X (the sum of all MRC items)
+    - "One Time Charges" $X (the sum of all NRC items)
+    - "Taxes, Fees & Surcharges" $X (the regulatory-and-tax bucket sum)
+    - "Plans and Services" $X
+    - "Adjustments" $X
+    - "Prorated Charges" $X
+    - "Current Charges" $X
+- "Balance Due", "BALANCE DUE", "Amount Due", "Total Amount Due", "Total Due This Bill" — the document-level grand total
+
+Emit each one as its own output row with:
 - `row_type`: "C"
 - `charge_type`: "Subtotal"
-- `component_or_feature_name`: the label exactly as printed (e.g., "Total Monthly Service", "Total Company Fees and Surcharges", "Total Government Fees and Taxes", "Total Plans and Services", "Total Current Charges", "Total Amount Due", "Total Billed for 614-555-1234")
-- `monthly_recurring_cost`: the dollar amount shown on that total line
-- `phone_number`: populate ONLY if the total is scoped to a specific phone line (e.g., "Total Billed for 614-555-1234"). Otherwise leave null — document-level totals have no phone_number.
+- `component_or_feature_name`: the label exactly as printed (preserve the original casing and spacing)
+- `monthly_recurring_cost`: the dollar amount shown on that line
+- `phone_number`: populate ONLY if the line is scoped to a specific phone line (e.g., "Total Billed for 614-555-1234"). Otherwise leave null — document-level subtotals have no phone_number.
 - `carrier_account_number`: same as the per-line rows.
 
-Capture each labeled total even if the value is $0.00 (e.g., "Total Government Fees and Taxes: .00"). Do NOT invent totals that are not explicitly labeled in the document.
+Capture each labeled aggregate even if the value is $0.00. Do NOT invent labels that are not explicitly printed. The goal is COMPLETE extraction — the analyst needs every line that appears on the page, both individual line items AND every aggregate row, so the inventory matches the bill exactly.
+
+ROW-COUNT EXPECTATION: For a typical multi-section telecom invoice expect 8–30+ rows per page of detail (line items + each section subtotal + each tax/surcharge item + grand totals). If you find yourself returning fewer than 5 rows for a page that visibly has multiple sections with charges, you are summarizing — re-read the page and emit one row per visible labeled amount.
 
 Return a JSON array. One object per extracted row. If the document has no extractable billing data, return [].

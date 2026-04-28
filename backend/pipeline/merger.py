@@ -312,11 +312,34 @@ def rule_based_merge(
 
 
 # Fields that are the same across all rows in an account — safe to propagate
+# from any row that has them to rows that don't.
+#
+# Includes the FOUR groups customers expect to see populated everywhere
+# when the same account spans many billing rows:
+#   1. Customer identity   — billing_name, service_address, city, state, zip, country
+#   2. Carrier / account   — carrier_name, master_account, carrier_account_number
+#   3. Document linkage    — invoice_file_name, contract_file_name, currency
+#   4. Contract metadata   — every contract_* / mtm / auto_renew / billing_per_contract
+#
+# `charge_type` is intentionally NOT here — it varies row-to-row (MRC vs
+# Tax vs Surcharge vs Subtotal), filling blanks would corrupt subtotal
+# tagging and break downstream compliance checks.
 _ACCOUNT_LEVEL_FIELDS = [
+    # Customer identity
     "billing_name", "service_address_1", "service_address_2",
     "city", "state", "zip", "country",
+    # Carrier / account
     "carrier_name", "master_account", "carrier_account_number",
-    "invoice_file_name", "currency", "charge_type",
+    # Document linkage + currency
+    "invoice_file_name", "contract_file_name", "currency",
+    # Contract metadata — when a contract is on file for the account, EVERY
+    # row of that account should reflect the contract's terms. Customers
+    # use this to spot M2M services / expired contracts at a glance.
+    "contract_term_months", "contract_begin_date", "contract_expiration_date",
+    "contract_number", "contract_number_2",
+    "currently_month_to_month", "mtm_or_less_than_year",
+    "billing_per_contract", "auto_renew", "auto_renewal_notes",
+    "contract_info_received",
 ]
 
 
@@ -370,6 +393,27 @@ def _propagate_account_fields(
     if filled_count:
         logger.info(f"Account-level propagation: filled {filled_count} fields "
                     f"across {len(acct_groups)} account groups")
+
+    # Derive country from zip when country is blank.
+    # This is a per-row INFERENCE from the zip's pattern (no hardcoded
+    # client data, no carrier-specific lookup) — purely structural.
+    derived = 0
+    for row in rows:
+        if getattr(row, "country", None):
+            continue
+        z = (getattr(row, "zip", None) or "").strip()
+        if not z:
+            continue
+        # US zip: 5 digits (with optional -4 extension), e.g. 74702 or 74702-1550
+        if re.match(r"^\d{5}(-\d{4})?$", z):
+            row.country = "USA"
+            derived += 1
+        # Canadian: A1A 1A1 pattern
+        elif re.match(r"^[A-Za-z]\d[A-Za-z][\s-]?\d[A-Za-z]\d$", z):
+            row.country = "CAN"
+            derived += 1
+    if derived:
+        logger.info(f"Country derivation: filled {derived} country fields from zip pattern")
 
     return rows
 

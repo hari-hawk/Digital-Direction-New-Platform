@@ -106,6 +106,19 @@ RULES:
 - ZERO-COST ITEMS: If a line item shows $0.00 or 0.00 as its amount, extract it with monthly_recurring_cost: 0.00 (NOT null). Zero-cost items are real included features.
 - NAMES AND ADDRESSES: If text appears with spaces removed (e.g., "LOSANGELES" or "520S9THST"), reconstruct natural spacing in your output: "LOS ANGELES", "520 S 9TH ST"
 - COMPONENT NAMES: Extract the COMPLETE service/product name including tier descriptors (Gig, Ultra, Pro, Standard, etc.). If the name spans two lines, combine them.
+
+UNIVERSAL SUBTOTAL / TOTAL RULE (applies to ALL carriers and document layouts):
+Every explicitly-labeled aggregate line on the bill is its own row. This is REQUIRED — completeness matters more than brevity. Capture all of these patterns whenever the source text contains them, in addition to the per-line items:
+  - "Total …" — any line starting with "Total" (Total Monthly Service, Total Current Charges, Total Amount Due, Total Plans and Services, Total Fees and Surcharges, Total Government Fees and Taxes, Total Billed for 614-555-1234, etc.)
+  - "Subtotal", "Sub Total", "Sub-Total" — with or without a qualifier (Current Charges Subtotal, Previous Statement Balance Subtotal, Tax Subtotal)
+  - Section/category headers that AGGREGATE the items shown beneath them — even when the word "Total" is absent. Common across carriers:
+      Recurring Charges $X · One Time Charges $X · Taxes, Fees & Surcharges $X · Plans and Services $X · Adjustments $X · Prorated Charges $X · Current Charges $X · Company Fees and Surcharges $X · Government Fees and Taxes $X
+  - Grand totals: Balance Due, BALANCE DUE, Amount Due, Total Amount Due, Total Due This Bill
+For each one, emit a separate row with:
+  row_type: "C", charge_type: "Subtotal", component_or_feature_name: the label exactly as printed, monthly_recurring_cost: the amount shown, phone_number: only if scoped to a specific phone (e.g., "Total Billed for 614-555-1234").
+Capture even $0.00 subtotals (e.g., "Total Government Fees and Taxes .00"). Do NOT invent labels that are not explicitly printed.
+
+COMPLETENESS CHECK before returning: re-scan the document text. For every dollar amount you can see, verify the corresponding row is in your JSON. If a line is labeled and has a dollar amount, it goes in the output. The downstream system needs the full bill, not a summary.
 """
 
 
@@ -606,32 +619,73 @@ def _backfill_single_line_phones(rows: list[ExtractedRow], carrier: str, documen
 # Document-Level Extraction
 # ============================================
 
+def _count_line_item_signals(section_text: str) -> int:
+    """Estimate how many extractable line items the source text contains.
+
+    Counts distinct "[label] $amount" lines and "[number]. [label] $amount"
+    patterns — a closer proxy to "actual line items the user expects" than
+    raw $-count (which over-counts when summary totals appear repeatedly).
+
+    Conservative: deduplicates by label so the same total appearing 4 times
+    doesn't inflate the count.
+    """
+    if not section_text:
+        return 0
+    seen: set[str] = set()
+    # Pattern 1: lines like "Label text $12.34" or "Label text 12.34"
+    # Label must have at least one letter so we skip pure-numeric coupon rows.
+    for m in re.finditer(
+        r"(?m)^[ \t]*([A-Za-z][A-Za-z &/\-\(\)]{2,40}?)\s+\$?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s*$",
+        section_text,
+    ):
+        label = m.group(1).strip().lower()
+        if label and len(label) >= 3 and not label.startswith(("page ", "phone ")):
+            seen.add(label)
+    # Pattern 2: numbered list items "1. Label $12.34"
+    for m in re.finditer(
+        r"(?m)^\s*\d+\.\s*([A-Za-z][A-Za-z &/\-]{2,40})",
+        section_text,
+    ):
+        seen.add(m.group(1).strip().lower())
+    return len(seen)
+
+
 def _looks_under_extracted(rows: list, section_text: str) -> bool:
     """Heuristic: did Flash silently summarize a multi-item section?
 
-    AI Studio Flash occasionally returns just 1 "summary" row for a section
-    that clearly has many line items (e.g., a single-line AT&T bill with 23
-    numbered items + tax/surcharge rows). Symptom we have to detect from
-    output alone, since the LLM doesn't tell us it summarized.
+    Two trigger conditions:
 
-    Heuristic: if rows ≤ 1 AND the source text shows enumeration signals
-    (multiple money amounts, multiple "Total ..." labels, or numbered
-    list markers), it's likely under-extracted — caller should retry with
-    a stronger model.
+    A) Catastrophic — ≤2 rows but section has obvious enumeration signals.
+       Catches the AI Studio Flash "produces only the billing summary"
+       failure mode (5+ money amounts, 2+ Total labels, or 5+ numbered
+       items in source).
 
-    Tuned to be conservative: false-positive (unnecessary retry) is fine
-    once-in-a-while; false-negative (missed retry) is the user-visible bug.
+    B) Significant under-extraction — rows < 50% of estimated line items
+       AND source has 6+ line-item-shaped patterns. Catches the case
+       where Flash extracts page 1 but skips page 2 of a multi-page bill
+       (e.g. Spectrum invoices where the breakdown is on the next page).
+
+    Tuned to be conservative: false-positive (unnecessary retry) costs
+    one extra Pro call; false-negative (missed retry) is the user-visible
+    bug. We optimize against the user-visible bug.
     """
-    if len(rows) > 2:
-        return False
     if not section_text:
         return False
-    money = len(re.findall(r"\$?\d+\.\d{2}\b", section_text))
-    totals = len(re.findall(r"\bTotal[A-Za-z ]+\$?\d", section_text))
-    numbered = len(re.findall(r"(?m)^\s*\d+\.\s*[A-Za-z]", section_text))
-    # Multiple amounts + multiple totals = clearly multi-item; or a numbered
-    # list with 5+ entries.
-    return money >= 5 or totals >= 2 or numbered >= 5
+
+    # Signal A — catastrophic
+    if len(rows) <= 2:
+        money = len(re.findall(r"\$?\d+\.\d{2}\b", section_text))
+        totals = len(re.findall(r"\bTotal[A-Za-z ]+\$?\d", section_text))
+        numbered = len(re.findall(r"(?m)^\s*\d+\.\s*[A-Za-z]", section_text))
+        if money >= 5 or totals >= 2 or numbered >= 5:
+            return True
+
+    # Signal B — significant under-extraction
+    items = _count_line_item_signals(section_text)
+    if items >= 6 and len(rows) * 2 < items:
+        return True
+
+    return False
 
 
 def _format_extraction_error(section, err) -> str:
