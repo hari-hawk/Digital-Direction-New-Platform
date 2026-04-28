@@ -28,6 +28,9 @@ dependencies = [
     "alembic>=1.13.0",
     "extract-msg>=0.50.0",
     "langfuse>=2.0.0",
+    # Phase C (Apr-2026): GCS-backed file storage for prod. Local dev still
+    # uses LocalStorage; gcs is selected via STORAGE_BACKEND=gcs env var.
+    "google-cloud-storage>=2.18.0",
 ]
 
 [tool.setuptools.packages.find]

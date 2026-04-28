@@ -342,7 +342,12 @@ async def restore_upload(short_id: str, *, db: AsyncSession | None = None) -> bo
 
 
 async def hard_delete_upload(short_id: str, *, db: AsyncSession | None = None) -> bool:
-    """Purge: remove DB row, Redis counter, and on-disk files."""
+    """Purge: remove DB row, Redis counter, and stored files (local or GCS).
+
+    Storage cleanup goes through `storage.delete_prefix(temp/{short_id})` so
+    GCS objects are deleted when STORAGE_BACKEND=gcs and local files are
+    removed when STORAGE_BACKEND=local.
+    """
     sess, owned = await _open_session(db)
     try:
         row = (await sess.execute(select(Upload).where(Upload.short_id == short_id))).scalar_one_or_none()
@@ -358,10 +363,15 @@ async def hard_delete_upload(short_id: str, *, db: AsyncSession | None = None) -
     # Wipe Redis counter
     _r().delete(_files_processed_key(short_id))
 
-    # Wipe disk folder
-    upload_dir = Path(settings.storage_base_dir) / "temp" / short_id
-    if upload_dir.exists():
-        shutil.rmtree(upload_dir, ignore_errors=True)
+    # Wipe stored files via the storage abstraction. Imported lazily to avoid
+    # a circular import (storage → settings; upload_store imported at app boot).
+    try:
+        from backend.services.storage import get_storage
+        get_storage().delete_prefix(f"temp/{short_id}")
+    except Exception as e:
+        logger.warning("hard_delete_upload: storage cleanup failed for %s: %s", short_id, e)
+        # Don't fail the whole purge — DB row is already gone.
+
     return True
 
 
@@ -371,16 +381,17 @@ async def hard_delete_upload(short_id: str, *, db: AsyncSession | None = None) -
 
 
 async def find_orphan_disk_folders(*, db: AsyncSession | None = None) -> list[dict[str, Any]]:
-    """Return disk folders in storage/temp/ that have no matching DB row.
+    """Return temp/* folders that have no matching DB row.
 
     Previously `_list_uploads` would silently bootstrap a Redis entry for
-    each orphan with `project_name=""`. That created the "(unnamed) uploads"
-    UX bug. Now orphans are surfaced explicitly so the admin can choose:
+    each orphan with `project_name=""` — the root of the "(unnamed) uploads"
+    UX bug. Now orphans are surfaced explicitly so the admin can decide:
     re-link to an existing project, recover with a fresh name, or purge.
+
+    Local storage: walks `<storage_base_dir>/temp/`.
+    GCS storage: lists `gs://<bucket>/temp/` keys grouped by the {short_id}
+    path component.
     """
-    temp_dir = Path(settings.storage_base_dir) / "temp"
-    if not temp_dir.exists():
-        return []
     sess, owned = await _open_session(db)
     try:
         known = {
@@ -392,23 +403,51 @@ async def find_orphan_disk_folders(*, db: AsyncSession | None = None) -> list[di
         if owned:
             await sess.close()
 
-    orphans = []
-    for folder in sorted(temp_dir.iterdir(), reverse=True):
-        if not folder.is_dir() or folder.name in known:
-            continue
-        files = sorted(
-            f.name for f in folder.iterdir() if f.is_file() and not f.name.startswith(".")
-        )
-        if not files:
-            continue
-        mtime = datetime.fromtimestamp(folder.stat().st_mtime, tz=timezone.utc).isoformat()
-        orphans.append(
-            {
+    # Local: walk the filesystem directly so we can read mtime + size cheaply.
+    if (settings.storage_backend or "local").lower() == "local":
+        temp_dir = Path(settings.storage_base_dir) / "temp"
+        if not temp_dir.exists():
+            return []
+        orphans = []
+        for folder in sorted(temp_dir.iterdir(), reverse=True):
+            if not folder.is_dir() or folder.name in known:
+                continue
+            files = sorted(
+                f.name for f in folder.iterdir() if f.is_file() and not f.name.startswith(".")
+            )
+            if not files:
+                continue
+            mtime = datetime.fromtimestamp(folder.stat().st_mtime, tz=timezone.utc).isoformat()
+            orphans.append({
                 "short_id": folder.name,
                 "path": str(folder),
                 "file_count": len(files),
                 "mtime": mtime,
                 "sample_files": files[:5],
-            }
-        )
+            })
+        return orphans
+
+    # GCS: list every blob under temp/, group by the short_id path segment.
+    from backend.services.storage import get_storage
+    paths = get_storage().list_prefix("temp")
+    by_short_id: dict[str, list[str]] = {}
+    for p in paths:
+        # gs://bucket/temp/{short_id}/{filename}
+        try:
+            after_temp = p.split("/temp/", 1)[1]
+            short_id, _, filename = after_temp.partition("/")
+            if short_id and filename and short_id not in known:
+                by_short_id.setdefault(short_id, []).append(filename)
+        except IndexError:
+            continue
+    orphans = []
+    for sid, files in by_short_id.items():
+        files.sort()
+        orphans.append({
+            "short_id": sid,
+            "path": f"gs://temp/{sid}/",
+            "file_count": len(files),
+            "mtime": "",  # GCS list doesn't surface dir mtime cheaply
+            "sample_files": files[:5],
+        })
     return orphans

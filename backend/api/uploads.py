@@ -29,6 +29,7 @@ from backend.pipeline.extractor import extract_document, score_confidence
 from backend.models.database import async_session
 from backend.models.orm import ExtractionRun, ExtractedRow as ExtractedRowDB
 from backend.services import upload_store as us
+from backend.services.storage import get_storage
 
 logger = logging.getLogger(__name__)
 
@@ -271,26 +272,33 @@ async def classify_upload(
     client_name: str = Form(""),
     description: str = Form(""),
 ):
-    """Upload files and classify by carrier. Returns classification for user review."""
+    """Upload files and classify by carrier. Returns classification for user review.
+
+    Files are written through `get_storage()` (Phase C, Apr-2026) so the
+    same flow works with local disk in dev and GCS in prod. The returned
+    `storage_path` is opaque — could be `/abs/path/...` for LocalStorage or
+    `gs://bucket/...` for GCSStorage. Pipeline reads via `storage.open_local()`.
+    """
     logger.info(f"Classify request: {len(files)} files, project={project_name}")
     upload_id = str(uuid.uuid4())[:8]
-    upload_dir = Path(settings.storage_base_dir) / "temp" / upload_id
-    upload_dir.mkdir(parents=True, exist_ok=True)
+    storage = get_storage()
 
     classified = []
-    saved_files = {}
+    saved_files: dict[str, str] = {}
 
-    # Save all files to disk first (fast I/O)
-    file_data: list[tuple[str, str, int]] = []  # (safe_name, file_path, size)
+    # Save all files via the storage abstraction.
+    # `temp/{id}/{filename}` keeps the existing on-disk layout intact for
+    # LocalStorage (so legacy paths still resolve), and gives us a clean
+    # prefix for GCS (`gs://bucket/temp/{id}/...`).
+    file_data: list[tuple[str, str, int]] = []  # (safe_name, storage_path, size)
     for file in files:
         safe_name = Path(file.filename).name
         if not safe_name:
             continue
-        file_path = upload_dir / safe_name
         content = await file.read()
-        file_path.write_bytes(content)
-        saved_files[safe_name] = str(file_path)
-        file_data.append((safe_name, str(file_path), len(content)))
+        storage_path = storage.save(content, f"temp/{upload_id}/{safe_name}")
+        saved_files[safe_name] = storage_path
+        file_data.append((safe_name, storage_path, len(content)))
 
     # Classify all files in parallel (pdfplumber is CPU-bound → thread pool).
     # Strategy: A (filename regex) → B (content regex) → C (open-ended LLM).
@@ -298,24 +306,29 @@ async def classify_upload(
     # so multi-carrier batches classify correctly per-file.
     from backend.pipeline.classifier import classify_by_llm, extract_first_pages_text
 
-    async def _classify_one(safe_name: str, fpath: str, fsize: int) -> ClassifiedFile:
-        stage_a = classify_by_filename(safe_name)
-        stage_b = await asyncio.to_thread(classify_by_content, fpath)
-        carrier_key = stage_b.carrier or stage_a.carrier
-        doc_type = stage_b.document_type or stage_a.document_type
-        format_variant = stage_b.format_variant
+    async def _classify_one(safe_name: str, sp: str, fsize: int) -> ClassifiedFile:
+        # open_local is zero-copy for LocalStorage and downloads-to-tempfile
+        # for GCS. We hold the context across all reads so a GCS file is
+        # downloaded once per classify, not once per stage.
+        with storage.open_local(sp) as local_path:
+            local_str = str(local_path)
+            stage_a = classify_by_filename(safe_name)
+            stage_b = await asyncio.to_thread(classify_by_content, local_str)
+            carrier_key = stage_b.carrier or stage_a.carrier
+            doc_type = stage_b.document_type or stage_a.document_type
+            format_variant = stage_b.format_variant
 
-        # Stage C: LLM fallback when A and B couldn't name a carrier.
-        # The LLM is open-ended — it returns the actual carrier printed on the doc.
-        if not carrier_key:
-            try:
-                text = await asyncio.to_thread(extract_first_pages_text, fpath)
-                if text:
-                    stage_c = await classify_by_llm(fpath, text)
-                    carrier_key = stage_c.carrier or carrier_key
-                    doc_type = doc_type or stage_c.document_type
-            except Exception as e:
-                logger.warning(f"LLM classify failed for {safe_name}: {e}")
+            # Stage C: LLM fallback when A and B couldn't name a carrier.
+            # The LLM is open-ended — it returns the actual carrier printed on the doc.
+            if not carrier_key:
+                try:
+                    text = await asyncio.to_thread(extract_first_pages_text, local_str)
+                    if text:
+                        stage_c = await classify_by_llm(local_str, text)
+                        carrier_key = stage_c.carrier or carrier_key
+                        doc_type = doc_type or stage_c.document_type
+                except Exception as e:
+                    logger.warning(f"LLM classify failed for {safe_name}: {e}")
 
         # Configured carriers use their canonical display name ("AT&T"),
         # detected/unknown ones show title-cased slug ("frontier" -> "Frontier").
@@ -439,26 +452,42 @@ async def get_results(upload_id: str, view: str | None = None):
 
 @router.get("/{upload_id}/download")
 async def download_all_files(upload_id: str):
-    """Download every uploaded source file for a project as a single ZIP."""
+    """Download every uploaded source file for a project as a single ZIP.
+
+    Reads through the storage abstraction so the same handler works against
+    LocalStorage (zero-copy) and GCSStorage (downloads each blob to a tempfile
+    long enough to copy into the ZIP).
+    """
     import io
     import zipfile
-    upload_dir = Path(settings.storage_base_dir) / "temp" / upload_id
-    if not upload_dir.exists():
-        return JSONResponse(status_code=404, content={"error": "Upload files not found"})
 
+    upload = await _get_upload(upload_id)
+    if not upload:
+        return JSONResponse(status_code=404, content={"error": "Upload not found"})
+
+    saved_files: dict[str, str] = upload.get("files") or {}
+    if not saved_files:
+        return JSONResponse(status_code=404, content={"error": "No files on record for this upload"})
+
+    storage = get_storage()
     buf = io.BytesIO()
     added = 0
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in sorted(upload_dir.iterdir()):
-            if f.is_file() and not f.name.startswith("."):
-                zf.write(f, arcname=f.name)
-                added += 1
+        for filename, storage_path in sorted(saved_files.items()):
+            try:
+                with storage.open_local(storage_path) as local_path:
+                    zf.write(local_path, arcname=filename)
+                    added += 1
+            except FileNotFoundError:
+                logger.warning("ZIP skipped missing file %s (%s)", filename, storage_path)
+            except Exception as e:
+                logger.warning("ZIP skipped %s: %s", filename, e)
+
     if added == 0:
-        return JSONResponse(status_code=404, content={"error": "No files on disk for this upload"})
+        return JSONResponse(status_code=404, content={"error": "All source files are missing from storage"})
 
     buf.seek(0)
-    upload = await _get_upload(upload_id)
-    project_name = (upload.get("project_name") if upload else None) or upload_id
+    project_name = upload.get("project_name") or upload_id
     safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in project_name)
     from fastapi.responses import StreamingResponse
     return StreamingResponse(
@@ -470,12 +499,32 @@ async def download_all_files(upload_id: str):
 
 @router.get("/{upload_id}/files/{filename:path}")
 async def get_file(upload_id: str, filename: str):
-    """Serve an uploaded file (PDF, XLSX, etc.) for viewing in the browser."""
-    file_path = Path(settings.storage_base_dir) / "temp" / upload_id / filename
-    if not file_path.exists():
-        return JSONResponse(status_code=404, content={"error": "File not found"})
-    # Determine media type
-    suffix = file_path.suffix.lower()
+    """Serve an uploaded file (PDF, XLSX, etc.) for viewing in the browser.
+
+    Local storage: serves the file inline via FileResponse.
+    GCS storage: redirects to a short-lived signed URL, so the browser
+    streams directly from GCS without going through the FastAPI process.
+    """
+    upload = await _get_upload(upload_id)
+    if not upload:
+        return JSONResponse(status_code=404, content={"error": "Upload not found"})
+
+    saved_files: dict[str, str] = upload.get("files") or {}
+    storage_path = saved_files.get(filename)
+    if not storage_path:
+        return JSONResponse(status_code=404, content={"error": "File not found for this upload"})
+
+    storage = get_storage()
+    if not storage.exists(storage_path):
+        return JSONResponse(status_code=404, content={"error": "File missing from storage"})
+
+    # GCS-backed: redirect to a signed URL (5-min TTL is plenty for a viewer).
+    if storage_path.startswith("gs://"):
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=storage.public_url(storage_path, ttl_seconds=300), status_code=302)
+
+    # Local-backed: serve directly with the right media type.
+    suffix = Path(filename).suffix.lower()
     media_types = {
         ".pdf": "application/pdf",
         ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -485,7 +534,10 @@ async def get_file(upload_id: str, filename: str):
         ".msg": "application/vnd.ms-outlook",
         ".eml": "message/rfc822",
     }
-    return FileResponse(file_path, media_type=media_types.get(suffix, "application/octet-stream"))
+    with storage.open_local(storage_path) as local_path:
+        # local_path is the actual on-disk file for LocalStorage (zero-copy);
+        # FileResponse holds it open through the response lifecycle.
+        return FileResponse(local_path, media_type=media_types.get(suffix, "application/octet-stream"))
 
 
 @router.post("/{upload_id}/cancel")
@@ -880,16 +932,19 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
             filename = assignment["filename"]
             carrier_display = assignment["carrier"]
             carrier_key = _carrier_display_to_key(carrier_display) or "unknown"
-            file_path = saved_files.get(filename)
+            storage_path = saved_files.get(filename)
 
-            if not file_path:
+            if not storage_path:
                 continue
 
             try:
                 logger.info(f"Extracting: {filename} (carrier={carrier_key})")
 
-                # Parse
-                parsed = parse_document(file_path, carrier_key, assignment.get("doc_type", "invoice"))
+                # Parse via the storage abstraction. open_local is zero-copy
+                # for LocalStorage and downloads-to-tempfile for GCS.
+                storage = get_storage()
+                with storage.open_local(storage_path) as local_path:
+                    parsed = parse_document(str(local_path), carrier_key, assignment.get("doc_type", "invoice"))
 
                 if not parsed.sections:
                     logger.warning(f"No sections from {filename}")
