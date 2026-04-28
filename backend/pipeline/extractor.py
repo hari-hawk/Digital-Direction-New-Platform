@@ -303,6 +303,7 @@ async def extract_section(
 
     # Call Gemini — multimodal for scanned PDFs, text for everything else
     gemini = get_gemini()
+    response = None
     try:
         if section.section_type == "scanned" and source_file_path:
             # Extract page range from section text (e.g., "pages 4-6")
@@ -364,7 +365,8 @@ async def extract_section(
             response = await gemini.extract(prompt, model=model)
         raw_rows = _parse_json_response(response.content)
     except (json.JSONDecodeError, ValueError) as e:
-        logger.error(f"JSON parse failed: {e}. Response: {response.content[:500]}")
+        content = response.content[:500] if response else "no response"
+        logger.error(f"JSON parse failed: {e}. Response: {content}")
         return [], response
     except Exception as e:
         logger.error(f"Extraction failed: {e}")
