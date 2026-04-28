@@ -1037,34 +1037,43 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
                                if any(i.get("severity") == "error" for i in (r.get("validation_issues") or [])))
         unique_accounts = len({r.get("carrier_account_number") for r in all_rows if r.get("carrier_account_number")})
 
-        # Carrier post-processing:
-        #   - If LLM-extracted carrier_name matches a configured carrier (by
-        #     alias), canonicalize to the registry display name.
-        #   - If carrier_name was extracted but is NOT in the registry, keep the
-        #     extracted string AND flip row.status to "Validate carrier" so an
-        #     analyst can confirm + register it.
-        #   - If no carrier_name at all, leave the row alone — the upload card
-        #     will render as "Unknown" (truly no signal).
+        # Carrier post-processing — every carrier is supported, no manual setup needed.
+        #   1. Auto-register any LLM-detected carrier that's not yet in the registry
+        #      (writes a minimal carrier.yaml + hot-reloads the config store).
+        #      So next upload of the same carrier sees it as known.
+        #   2. Canonicalize each row's carrier_name to the registry display name
+        #      (handles "Verizon Wireless" → "Verizon", etc.).
+        #   3. Track which carriers appeared so the upload card can list them.
         from backend.services.carrier_match import match_carrier_name
+        from backend.services.auto_carrier_registry import auto_register_from_rows
+
+        # Step 1: auto-register first, so the second pass picks up new carriers
+        # as registered (canonicalized + no "Validate carrier" friction).
+        newly_registered = auto_register_from_rows(all_rows)
+        if newly_registered:
+            logger.info(
+                "Auto-registered %d new carrier(s): %s",
+                len(newly_registered),
+                [r["name"] for r in newly_registered],
+            )
+
+        # Step 2: canonicalize each row's carrier_name now that the registry
+        # includes the freshly-registered carriers.
         canonical_names: set[str] = set()
-        needs_validation_count = 0
         for r in all_rows:
             raw = r.get("carrier_name") or r.get("carrier")
             match = match_carrier_name(raw)
             if match is None:
                 continue
-            # Replace with canonical display name so the row + summary agree.
             r["carrier_name"] = match.canonical_name
             canonical_names.add(match.canonical_name)
-            if not match.is_registered:
-                needs_validation_count += 1
-                # Preserve a stronger status if one is already set (e.g. "Needs Review").
-                if not r.get("status"):
-                    r["status"] = "Validate carrier"
         computed_carriers = sorted(n for n in canonical_names if n.lower() != "unknown")
+        # needs_validation_count is now always 0 — auto-register closes the loop.
+        # Kept as a field for backward compat with the API contract.
+        needs_validation_count = 0
         logger.info(f"Validation: {rows_with_issues} of {len(all_rows)} rows have issues ({rows_error_level} at error severity)")
-        logger.info(f"Carriers: {len(computed_carriers)} unique canonical, "
-                    f"{needs_validation_count} rows need carrier validation, "
+        logger.info(f"Carriers: {len(computed_carriers)} unique canonical "
+                    f"({len(newly_registered)} auto-registered), "
                     f"{unique_accounts} unique accounts, names={computed_carriers}")
 
         await _update_upload_field(

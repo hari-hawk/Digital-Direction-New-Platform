@@ -122,8 +122,9 @@ def parse_with_docling(
                 section_type="full_document",
             )]
 
-        # Same safety net as parse_raw_text — cap any oversized section so an
-        # unconfigured carrier doesn't ship a single 1.9M-token blob to Gemini.
+        # Safety net: cap any oversized section so a carrier without a custom
+        # boundary_pattern in carrier.yaml doesn't ship a single 1.9M-token
+        # blob to Gemini. Generic prompt fallback handles all carriers.
         sections = _enforce_max_section_size(sections)
 
         return ParsedDocument(
@@ -227,9 +228,11 @@ def parse_raw_text(
             section_type="full_document",
         )]
 
-    # Safety net: cap section text to MAX_SECTION_CHARS so an unconfigured
-    # carrier (no boundary_pattern in carrier.yaml) doesn't ship a 1.9M-token
-    # blob to Gemini and silently fail with 400 INVALID_ARGUMENT.
+    # Safety net: cap section text to MAX_SECTION_CHARS so a carrier without
+    # a custom boundary_pattern in carrier.yaml doesn't ship a 1.9M-token blob
+    # to Gemini and silently fail with 400 INVALID_ARGUMENT. Generic prompt
+    # fallback handles all carriers; this just keeps the LLM call within its
+    # input-token budget.
     sections = _enforce_max_section_size(sections)
 
     return ParsedDocument(
@@ -538,11 +541,12 @@ def _enforce_max_section_size(
     """Safety net: split any oversized section so no single LLM call blows
     past the input-token limit.
 
-    Without this, an unconfigured carrier (e.g. Verizon — no boundary pattern
-    in carrier.yaml) produces one "full_document" section. For a 9 MB PDF that
-    can be ~1.9M tokens and Gemini Flash silently rejects it with 400
-    INVALID_ARGUMENT. The user sees 0 rows and no error — the original
-    "extraction not processing properly" symptom.
+    Without this, a carrier without a custom boundary_pattern in carrier.yaml
+    (most carriers — only the 4 fully-tuned ones define one) produces a single
+    "full_document" section. For a 9 MB PDF that can be ~1.9M tokens and
+    Gemini Flash silently rejects it with 400 INVALID_ARGUMENT. The user sees
+    0 rows and no error — the original "extraction not processing properly"
+    symptom.
 
     Splits on `\n\n` (paragraph), then `\n` (line) boundaries. If a single
     line is itself > max_chars (rare; pathological PDF text) it's hard-split.

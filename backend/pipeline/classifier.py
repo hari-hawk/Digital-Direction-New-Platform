@@ -24,6 +24,60 @@ logger = logging.getLogger(__name__)
 MIN_ALIAS_LENGTH = 4
 
 
+# Generic doc_type heuristics (filename-based).
+#
+# Lets every uploaded file pick up a doc_type even when the carrier doesn't
+# have filename_patterns defined — so the right generic prompt at
+# configs/processing/{doc_type}_extraction.md fires (invoice/csr/contract/email).
+# Without this, doc_type stayed None for ~63 of our 67 carriers and the
+# extractor fell back to "invoice" silently. Now any carrier benefits from
+# the right prompt template.
+#
+# Custom word boundary that ALSO treats `_` and `.` as separators (Python's
+# `\b` treats `_` as a word char, so `_BILL.pdf` doesn't match `\bbill\b`).
+# Trailing digits are allowed so `BILL1`, `BILL2` (carrier-specific
+# revision suffixes — e.g., Nextiva_…_BILL1.pdf) still classify as invoice.
+def _wb(keyword: str) -> str:
+    return rf"(?<![a-z0-9]){keyword}\d?(?![a-z])"
+
+
+# Order matters — most specific keywords first.
+_DOC_TYPE_FILENAME_HINTS: list[tuple[str, str]] = [
+    # csr — common variants
+    (rf"{_wb('csr')}|customer[\s_.-]?service[\s_.-]?record|service[\s_.-]?record", "csr"),
+    # contract / agreement / quote / order
+    (rf"{_wb('contract')}|agreement|amendment|signed[\s_.-]?quote|order[\s_.-]?form|{_wb('msa')}|{_wb('sow')}|addendum", "contract"),
+    # report variants
+    (rf"{_wb('report')}|usage|itemized|spend[\s_.-]?summary|trending", "report"),
+    # phone-number lists
+    (rf"{_wb('did')}[\s_.-]?list|{_wb('tn')}[\s_.-]?list|number[\s_.-]?inventory", "did_list"),
+    # subscription / plan
+    (rf"{_wb('subscription')}|plan[\s_.-]?details|features[\s_.-]?list", "subscription"),
+    # invoice — keep last among PDF/text hints since "BILL"/"INVOICE" is the
+    # broadest signal and we want the more specific ones to win first.
+    (rf"{_wb('invoice')}|{_wb('invc')}|{_wb('bill')}|billing[\s_.-]?statement|statement", "invoice"),
+]
+
+
+def _infer_doc_type_from_filename(filename: str) -> str | None:
+    """Best-effort doc_type guess based on filename keywords. Returns one of
+    invoice/csr/contract/report/did_list/subscription/email, or None when
+    nothing matches confidently."""
+    if not filename:
+        return None
+    name_lower = filename.lower()
+
+    # Extension-based fast paths
+    suffix = Path(filename).suffix.lower()
+    if suffix in (".msg", ".eml"):
+        return "email"
+
+    for pattern, doc_type in _DOC_TYPE_FILENAME_HINTS:
+        if re.search(pattern, name_lower):
+            return doc_type
+    return None
+
+
 def _alias_match_in_text(text: str, aliases: list[str]) -> tuple[str, int] | None:
     """Word-boundary match of any ≥MIN_ALIAS_LENGTH alias within `text`.
 
@@ -107,6 +161,14 @@ def classify_by_filename(filename: str) -> ClassificationResult:
                         match = "".join(match)
                     best_match.account_number = match
                     break
+
+    # Generic doc_type fallback — applies to every file regardless of whether
+    # the carrier has filename_patterns. Stops doc_type from defaulting to
+    # "invoice" silently when the file is actually a CSR / contract / report.
+    if not best_match.document_type:
+        guessed = _infer_doc_type_from_filename(filename)
+        if guessed:
+            best_match.document_type = guessed
 
     return best_match
 

@@ -273,3 +273,13 @@ def get_config_store() -> ConfigStore:
         _store = ConfigStore()
         _store.load_all()
     return _store
+
+
+def reset_config_store() -> None:
+    """Drop the singleton so the next get_config_store() re-reads from disk.
+
+    Used after auto-registering a newly-discovered carrier so the next
+    classify/extract call sees the new carrier.yaml without a process restart.
+    """
+    global _store
+    _store = None
