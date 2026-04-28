@@ -55,6 +55,10 @@ CREATE TABLE uploads (
     rows_error_level             INT DEFAULT 0,
     unique_accounts              INT DEFAULT 0,
     rows_needing_carrier_validation INT DEFAULT 0,
+    -- Per-file failures during extraction (silent-failure surfacing).
+    -- Each entry: {filename, carrier, reason}. Frontend renders an amber
+    -- banner on the upload card listing these.
+    extraction_errors JSONB DEFAULT '[]'::jsonb,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );

@@ -101,6 +101,7 @@ async def _list_uploads(include_deleted: bool = False, only_deleted: bool = Fals
             "rows_error_level": data.get("rows_error_level", 0),
             "unique_accounts": data.get("unique_accounts", 0),
             "rows_needing_carrier_validation": data.get("rows_needing_carrier_validation", 0),
+            "extraction_errors": data.get("extraction_errors", []),
             "carriers": computed_carriers or classified_carriers,
         })
     return out
@@ -919,6 +920,9 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
         saved_files = upload["files"]
         all_rows = []
         files_processed = 0
+        # Per-file failure log — surfaced on the upload card so silent 0-row
+        # results stop being silent (e.g. PDF too big for the model).
+        extraction_errors: list[dict] = []
 
         for assignment in file_assignments:
             # Check if cancel was requested
@@ -948,10 +952,23 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
 
                 if not parsed.sections:
                     logger.warning(f"No sections from {filename}")
+                    extraction_errors.append({
+                        "filename": filename,
+                        "carrier": carrier_display,
+                        "reason": "Parser produced no sections — likely an unsupported format or empty PDF.",
+                    })
                     continue
 
-                # Extract
-                rows, responses = await extract_document(parsed)
+                # Extract — collect per-section errors so silent failures
+                # (oversized prompt, JSON parse error, timeout) are surfaced.
+                file_errors: list[str] = []
+                rows, responses = await extract_document(parsed, errors_out=file_errors)
+                if file_errors:
+                    extraction_errors.append({
+                        "filename": filename,
+                        "carrier": carrier_display,
+                        "reason": "; ".join(file_errors[:3]) + (" …" if len(file_errors) > 3 else ""),
+                    })
 
                 # Score per-field confidence
                 confidence_scores = score_confidence(rows)
@@ -1006,6 +1023,11 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
 
             except Exception as e:
                 logger.error(f"Extraction failed for {filename}: {e}")
+                extraction_errors.append({
+                    "filename": filename,
+                    "carrier": carrier_display,
+                    "reason": str(e)[:200],
+                })
                 continue
 
         # Summary stats — validation issues, unique accounts, carrier names
@@ -1054,9 +1076,16 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
             unique_accounts=unique_accounts,
             computed_carriers=computed_carriers,
             rows_needing_carrier_validation=needs_validation_count,
+            extraction_errors=extraction_errors,
         )
         await _update_upload_results(upload_id, all_rows)
         logger.info(f"Upload {upload_id} complete: {len(all_rows)} total rows from {files_processed} files")
+        if extraction_errors:
+            logger.warning(
+                "Upload %s finished with %d file-level extraction error(s): %s",
+                upload_id, len(extraction_errors),
+                [(e['filename'], e['reason'][:120]) for e in extraction_errors],
+            )
 
         # Persist to the typed extracted_rows table for analytics queries.
         await _persist_to_db(upload_id, all_rows, files_processed)

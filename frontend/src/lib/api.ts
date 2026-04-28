@@ -81,6 +81,10 @@ export interface UploadSummary {
   unique_accounts?: number;
   rows_needing_carrier_validation?: number;
   carriers?: string[]; // Canonical names when registered, else raw LLM-detected string
+  // Per-file failures during extraction (oversized PDF, parse failure, etc).
+  // When non-empty, the upload card renders an amber banner so silent
+  // 0-row results stop being silent.
+  extraction_errors?: { filename: string; carrier?: string; reason: string }[];
 }
 
 export async function apiListUploads(): Promise<{ uploads: UploadSummary[] }> {

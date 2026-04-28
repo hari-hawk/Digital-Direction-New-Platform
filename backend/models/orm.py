@@ -100,6 +100,10 @@ class Upload(Base):
     rows_error_level: Mapped[int] = mapped_column(Integer, default=0)
     unique_accounts: Mapped[int] = mapped_column(Integer, default=0)
     rows_needing_carrier_validation: Mapped[int] = mapped_column(Integer, default=0)
+    # Per-file failures during extraction (e.g. PDF too big for the model,
+    # parser produced no sections). Surfaced on the upload card so users
+    # see WHY a file produced 0 rows instead of guessing.
+    extraction_errors: Mapped[list] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

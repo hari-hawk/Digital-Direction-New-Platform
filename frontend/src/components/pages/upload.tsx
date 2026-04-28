@@ -546,6 +546,9 @@ export function UploadPage({ onViewResults }: UploadPageProps) {
                 // Carriers: LLM-detected post-extraction; fallback to classify-stage
                 // carrier labels, excluding "Unknown" which gets replaced once rows exist.
                 const carrierList = (u.carriers || []).filter((c) => c && c.toLowerCase() !== "unknown");
+                // Per-file extraction failures (silent-failure surfacing).
+                // We render a compact banner so 0-row results stop being mysterious.
+                const extErrors = u.extractionErrors ?? [];
                 return (
                   <Card key={u.id} className={`neu rounded-xl ${isGrid ? "p-4" : "px-5 py-3"}`}>
                     <div className={isGrid ? "flex flex-col gap-3" : "flex items-center justify-between gap-3"}>
@@ -641,6 +644,30 @@ export function UploadPage({ onViewResults }: UploadPageProps) {
                         </Button>
                       </div>
                     </div>
+                    {extErrors.length > 0 && (
+                      <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+                        <div className="flex items-start gap-2">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[11px] font-medium text-amber-300">
+                              {extErrors.length} file{extErrors.length === 1 ? "" : "s"} produced no rows
+                            </p>
+                            <ul className="mt-1 space-y-0.5">
+                              {extErrors.slice(0, 3).map((e, i) => (
+                                <li key={i} className="text-[10px] text-amber-200/80 leading-tight" title={e.reason}>
+                                  <span className="font-mono">{e.filename}</span>
+                                  {e.carrier && <span className="text-amber-300/60"> · {e.carrier}</span>}
+                                  <span className="text-amber-200/60"> — {e.reason.length > 80 ? e.reason.slice(0, 80) + "…" : e.reason}</span>
+                                </li>
+                              ))}
+                              {extErrors.length > 3 && (
+                                <li className="text-[10px] text-amber-300/60 italic">+{extErrors.length - 3} more</li>
+                              )}
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </Card>
                 );
               })}

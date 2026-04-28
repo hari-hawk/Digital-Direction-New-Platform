@@ -122,6 +122,7 @@ def _to_dict(u: Upload) -> dict[str, Any]:
         "rows_error_level": u.rows_error_level or 0,
         "unique_accounts": u.unique_accounts or 0,
         "rows_needing_carrier_validation": u.rows_needing_carrier_validation or 0,
+        "extraction_errors": u.extraction_errors or [],
         "created_at": u.created_at.replace(tzinfo=timezone.utc).isoformat() if u.created_at else "",
         "deleted_at": u.deleted_at.replace(tzinfo=timezone.utc).isoformat() if u.deleted_at else None,
     }
@@ -146,6 +147,7 @@ _FIELD_MAP = {
     "rows_error_level": "rows_error_level",
     "unique_accounts": "unique_accounts",
     "rows_needing_carrier_validation": "rows_needing_carrier_validation",
+    "extraction_errors": "extraction_errors",
     "deleted_at": "deleted_at",
 }
 

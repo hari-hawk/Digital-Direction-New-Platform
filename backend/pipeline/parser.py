@@ -16,6 +16,18 @@ from backend.models.schemas import ParsedDocument, ParsedSection
 logger = logging.getLogger(__name__)
 
 
+# Hard cap on the text size of a single section before it's sent to the LLM.
+# Gemini Flash accepts ~1M input tokens; ~4 chars per token gives ~250K tokens
+# per 1M chars. We cap well under that (~150K tokens) so prompt + global_context
+# + few-shot examples + output budget all fit comfortably with headroom for
+# carriers that have NO chunking config (Verizon, etc.) and would otherwise
+# emit one giant "full_document" section that crashes Gemini.
+#
+# Sections are split on newline boundaries to avoid mid-row splits in tabular
+# text. If a single line is itself >MAX_SECTION_CHARS the line is hard-split.
+MAX_SECTION_CHARS = 600_000
+
+
 # ============================================
 # Main Router
 # ============================================
@@ -109,6 +121,10 @@ def parse_with_docling(
                 global_context=global_context,
                 section_type="full_document",
             )]
+
+        # Same safety net as parse_raw_text — cap any oversized section so an
+        # unconfigured carrier doesn't ship a single 1.9M-token blob to Gemini.
+        sections = _enforce_max_section_size(sections)
 
         return ParsedDocument(
             file_path=file_path,
@@ -210,6 +226,11 @@ def parse_raw_text(
             global_context=global_context,
             section_type="full_document",
         )]
+
+    # Safety net: cap section text to MAX_SECTION_CHARS so an unconfigured
+    # carrier (no boundary_pattern in carrier.yaml) doesn't ship a 1.9M-token
+    # blob to Gemini and silently fail with 400 INVALID_ARGUMENT.
+    sections = _enforce_max_section_size(sections)
 
     return ParsedDocument(
         file_path=file_path,
@@ -508,6 +529,97 @@ def _extract_att_csr_address_context(full_text: str) -> str:
     logger.info(f"AT&T CSR address context: default={bool(default_addr)}, "
                 f"{len(sla_entries)} SLA entries, {len(cnum_matches)} /CNUM refs")
     return context
+
+
+def _enforce_max_section_size(
+    sections: list[ParsedSection],
+    max_chars: int = MAX_SECTION_CHARS,
+) -> list[ParsedSection]:
+    """Safety net: split any oversized section so no single LLM call blows
+    past the input-token limit.
+
+    Without this, an unconfigured carrier (e.g. Verizon — no boundary pattern
+    in carrier.yaml) produces one "full_document" section. For a 9 MB PDF that
+    can be ~1.9M tokens and Gemini Flash silently rejects it with 400
+    INVALID_ARGUMENT. The user sees 0 rows and no error — the original
+    "extraction not processing properly" symptom.
+
+    Splits on `\n\n` (paragraph), then `\n` (line) boundaries. If a single
+    line is itself > max_chars (rare; pathological PDF text) it's hard-split.
+    Each piece carries the same global_context, sub_account, and section_type
+    so downstream extraction logic still groups them as one logical section.
+    """
+    out: list[ParsedSection] = []
+    for section in sections:
+        text = section.text or ""
+        if len(text) <= max_chars:
+            out.append(section)
+            continue
+
+        pieces = _split_text_safely(text, max_chars)
+        logger.warning(
+            "Section text %d chars > %d cap — splitting into %d pieces "
+            "(carrier=%s, sub_account=%s, section_type=%s)",
+            len(text), max_chars, len(pieces),
+            getattr(section, "carrier", None), section.sub_account, section.section_type,
+        )
+        for i, piece in enumerate(pieces, 1):
+            out.append(ParsedSection(
+                text=piece,
+                global_context=section.global_context,
+                section_type=section.section_type,
+                sub_account=section.sub_account,
+            ))
+    return out
+
+
+def _split_text_safely(text: str, max_chars: int) -> list[str]:
+    """Split text into ≤max_chars chunks, preferring paragraph then line
+    boundaries. Last-resort hard-split for pathological cases."""
+    if len(text) <= max_chars:
+        return [text]
+
+    # Try paragraph-aligned split first.
+    chunks = _greedy_pack(text.split("\n\n"), separator="\n\n", max_chars=max_chars)
+    if all(len(c) <= max_chars for c in chunks):
+        return chunks
+
+    # Fall back to line-aligned within any chunk that's still too large.
+    final: list[str] = []
+    for c in chunks:
+        if len(c) <= max_chars:
+            final.append(c)
+            continue
+        line_chunks = _greedy_pack(c.split("\n"), separator="\n", max_chars=max_chars)
+        for lc in line_chunks:
+            if len(lc) <= max_chars:
+                final.append(lc)
+            else:
+                # Truly pathological — hard-split.
+                for i in range(0, len(lc), max_chars):
+                    final.append(lc[i:i + max_chars])
+    return final
+
+
+def _greedy_pack(parts: list[str], separator: str, max_chars: int) -> list[str]:
+    """Pack `parts` back into chunks ≤max_chars, joined with `separator`.
+    Each individual part may still exceed max_chars — caller handles."""
+    chunks: list[str] = []
+    cur: list[str] = []
+    cur_len = 0
+    sep_len = len(separator)
+    for p in parts:
+        added = len(p) + (sep_len if cur else 0)
+        if cur and cur_len + added > max_chars:
+            chunks.append(separator.join(cur))
+            cur = [p]
+            cur_len = len(p)
+        else:
+            cur.append(p)
+            cur_len += added
+    if cur:
+        chunks.append(separator.join(cur))
+    return chunks
 
 
 def _chunk_by_boundary(

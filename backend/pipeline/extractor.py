@@ -561,12 +561,39 @@ def _backfill_single_line_phones(rows: list[ExtractedRow], carrier: str, documen
 # Document-Level Extraction
 # ============================================
 
+def _format_extraction_error(section, err) -> str:
+    """Render a one-line, user-facing reason a section failed to extract.
+    Strips Python tracebacks down to the meaningful clause."""
+    msg = str(err)
+    if "INVALID_ARGUMENT" in msg and "token count" in msg:
+        # The original Gemini error is a long JSON blob — boil it down.
+        m = re.search(r"input token count \((\d+)\) exceeds the maximum.*?\((\d+)\)", msg)
+        if m:
+            return (
+                f"section '{section.section_type}' too large for the model "
+                f"({int(m.group(1)):,} input tokens > {int(m.group(2)):,} max). "
+                f"Pre-parser cap should have prevented this — check carrier config."
+            )
+    if "TimeoutError" in msg or "timed out" in msg:
+        return f"section '{section.section_type}' (sub_account={section.sub_account}) timed out"
+    # Generic short summary
+    short = msg.splitlines()[0][:200]
+    return f"section '{section.section_type}': {short}"
+
+
 async def extract_document(
     parsed_doc: ParsedDocument,
     few_shot_examples: list[dict] | None = None,
     correction_hints: list | None = None,
+    errors_out: list[str] | None = None,
 ) -> tuple[list[ExtractedRow], list[LLMResponse]]:
-    """Extract all sections in parallel batches. Semaphore in GeminiClient handles rate limits."""
+    """Extract all sections in parallel batches. Semaphore in GeminiClient handles rate limits.
+
+    errors_out: optional mutable list. When provided, each section that fails
+    (LLM error, timeout, JSON parse error) appends a human-readable string so
+    the caller can surface "Verizon file: too large for extraction" on the
+    upload card instead of a silent 0-rows result.
+    """
     store = get_config_store()
 
     # Pre-extract spatial address blocks from PDF (if available).
@@ -642,9 +669,19 @@ async def extract_document(
         for section, result in zip(batch, results):
             if isinstance(result, (Exception, TimeoutError)):
                 logger.error(f"Section extraction failed: {result}")
+                if errors_out is not None:
+                    errors_out.append(_format_extraction_error(section, result))
                 continue
 
             rows, response = result
+            # Even when extract_section catches its own exception (e.g. 400
+            # INVALID_ARGUMENT from oversized prompt), it returns ([], None).
+            # Surface that as an error too so the user sees why a section
+            # produced 0 rows.
+            if not rows and response is None and errors_out is not None:
+                errors_out.append(_format_extraction_error(
+                    section, "LLM call failed (see logs); check model + section size"
+                ))
             for row in rows:
                 if section.sub_account:
                     row.sub_account_number_1 = section.sub_account

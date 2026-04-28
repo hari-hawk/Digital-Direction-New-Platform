@@ -98,6 +98,10 @@ export interface Upload {
   rowsWithIssues?: number;
   uniqueAccounts?: number;
   rowsNeedingCarrierValidation?: number;
+  // Per-file extraction failures (silent-failure surfacing). Backend
+  // populates from extract_document errors_out; UI renders an amber banner
+  // listing them on the upload card.
+  extractionErrors?: { filename: string; carrier?: string; reason: string }[];
 }
 
 interface ClassifiedFileFromAPI {
@@ -331,6 +335,7 @@ export const useAppStore = create<AppStore>()(
           totalCost: 0,
           carriers,
           rowsWithIssues: s.rows_with_issues,
+          extractionErrors: s.extraction_errors,
           uniqueAccounts: s.unique_accounts,
           rowsNeedingCarrierValidation: s.rows_needing_carrier_validation,
         };
