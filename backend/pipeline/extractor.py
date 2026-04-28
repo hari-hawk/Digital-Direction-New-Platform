@@ -107,6 +107,21 @@ RULES:
 - NAMES AND ADDRESSES: If text appears with spaces removed (e.g., "LOSANGELES" or "520S9THST"), reconstruct natural spacing in your output: "LOS ANGELES", "520 S 9TH ST"
 - COMPONENT NAMES: Extract the COMPLETE service/product name including tier descriptors (Gig, Ultra, Pro, Standard, etc.). If the name spans two lines, combine them.
 
+CANONICAL VOCABULARY (use these EXACT values when populating these fields):
+- charge_type: one of "MRC" / "NRC" / "OCC" / "Prorated Charges" / "Surcharge" / "Taxes" / "Usage" / "Subtotal".
+    · "Taxes" (plural — government taxes including federal, state, local, sales tax)
+    · "Surcharge" (regulatory fees: Federal/State USF, E911, Regulatory Assessment, Broadcast TV Surcharge, Franchise Fee for telecom-style fees)
+    · "OCC" = Other Credit and Charges (adjustments, refunds, account credits)
+    · "Subtotal" for aggregated total / category-header rows (Recurring Charges, Total Monthly Service, BALANCE DUE, etc.)
+- service_or_component: one of "S" / "C" / "U" / "T\\S\\OCC".
+    · "S" = main service-level charge
+    · "C" = component/feature under a service
+    · "U" = usage row
+    · "T\\S\\OCC" = tax / surcharge / other credit row
+- currently_month_to_month, mtm_or_less_than_year, auto_renew: exactly "Yes" or "No".
+- status (analyst workflow): "Complete" / "Withdrawn" / "Pending" / "Partially Obtained" — leave NULL/blank by default. Do NOT auto-set to "Active" or "Inactive".
+- service_type: when you can confidently classify the service, prefer one of the canonical telecom service-type labels (Broadband, DIA, MPLS, SDWAN, Ethernet, POTS, SIP Trunk, Hosted VOIP, Cellular, Long Distance, Local Usage, DID, DID Trunks, ISDN PRI, ISDN BRI, DS1, DS3, Sonet, Dark Fiber, Point to Point, Centrex, Calling Card, Conferencing, E911, TV, Voice Mail, Listing, etc.). If unsure, leave blank.
+
 UNIVERSAL SUBTOTAL / TOTAL RULE (applies to ALL carriers and document layouts):
 Every explicitly-labeled aggregate line on the bill is its own row. This is REQUIRED — completeness matters more than brevity. Capture all of these patterns whenever the source text contains them, in addition to the per-line items:
   - "Total …" — any line starting with "Total" (Total Monthly Service, Total Current Charges, Total Amount Due, Total Plans and Services, Total Fees and Surcharges, Total Government Fees and Taxes, Total Billed for 614-555-1234, etc.)

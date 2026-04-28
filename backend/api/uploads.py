@@ -1192,6 +1192,22 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
             _propagate_account_level_fields_in_dicts(all_rows)
         except Exception as e:
             logger.warning("account-level propagation skipped: %s", e)
+
+        # Step 4: normalize dropdown-constrained columns to the customer's
+        # canonical vocab (configs/processing/column_dropdowns.yaml). Maps
+        # near-misses ("Tax" → "Taxes", "monthly" → "Yes" for MTM, etc.).
+        # Anything that can't be confidently mapped stays verbatim and is
+        # logged in row['_dropdown_warnings'] for analyst review.
+        try:
+            from backend.services.dropdown_normalizer import normalize_rows
+            stats = normalize_rows(all_rows)
+            if stats.get("warned"):
+                logger.info(
+                    "Dropdown normalization: %d rows warned (out-of-vocab values), %d clean",
+                    stats["warned"], stats["normalized"],
+                )
+        except Exception as e:
+            logger.warning("dropdown normalization skipped: %s", e)
         try:
             doc_types = {(fa.get("doc_type") or "").lower() for fa in file_assignments}
             filenames = [(fa.get("filename") or "") for fa in file_assignments]

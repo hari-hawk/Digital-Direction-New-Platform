@@ -1,0 +1,213 @@
+# Canonical dropdown vocabularies for the inventory columns.
+# Sourced from the customer's "Dropdown Details.xlsx" (2026-04-28).
+# Used by:
+#   - The extraction prompt (configs/processing/invoice_extraction.md and
+#     each carrier's prompts/) — the LLM is told to match these exactly.
+#   - A post-extraction normalization step in
+#     backend/api/uploads.py::_normalize_dropdown_columns that maps free-form
+#     LLM output (e.g. "Tax" → "Taxes", "monthly" → "Yes") to the canonical
+#     dropdown value when the match is unambiguous.
+#   - Validation: rows that emit a value not in the dropdown get a
+#     `review_status` flag so an analyst sees them.
+
+# 86 standardized service types. Order preserved from the source sheet.
+service_type:
+  - Account Level
+  - Analog Circuits
+  - Audit
+  - Broadband
+  - Calling Card
+  - CDN
+  - Cellular
+  - Centrex
+  - Cloud Direct Connection
+  - CO Muxed T1
+  - Collocation
+  - Conferencing
+  - CPE
+  - DaaS
+  - Dark Fiber
+  - Data Voice Bundled
+  - DIA
+  - Dial Up Internet
+  - DID
+  - DID Trunks
+  - DRaaS
+  - DS1
+  - DS3
+  - DSL
+  - E911
+  - Electronic Fax
+  - Ethernet
+  - Hosted VOIP
+  - Integrated Circuit
+  - Inventory Creation
+  - ISDN BRI
+  - ISDN PRI
+  - Listing
+  - Local Usage
+  - Long Distance
+  - MPLS
+  - NET MGMT
+  - PBX/Biz Trunks
+  - Point to Point
+  - POTS
+  - RCF
+  - SDWAN
+  - SIP Trunk
+  - Sonet
+  - Telecom Management
+  - Telecom Project Management
+  - TF - Dedicated
+  - TF - Switched
+  - TV
+  - UCaaS
+  - Usage
+  - Virus Protection
+  - Voice Mail
+  - VOIP DID
+  - VOIP Line
+  - VPLS
+  - VPN
+  - VTN
+  - Wireless Cellular Internet
+  - Wireless DIA
+  # legacy/deprecated but accepted on existing data
+  - ABN
+  - AVTS
+  - Branch Office Extension (BOE)
+  - Cable Internet
+  - Cloud Storage
+  - Completelink
+  - DIA-Managed
+  - DIA-Unmanaged
+  - FIOS
+  - Foreign Exchange
+  - Hosting
+  - Integrated T1
+  - IP/Flex
+  - LD - Dedicated
+  - LD - Switched
+  - Managed Network Services
+  - MDA
+  - MPLS-Managed
+  - MPLS-Unmanaged
+  - P2P Interstate
+  - P2P Intrastate
+  - P2P Metro
+  - Payphone
+  - TEM - Enhanced
+  - Uverse
+  - Wireless Internet
+
+# Analyst workflow status — applies to the row's `status` field.
+status:
+  - Complete           # all possible information obtained
+  - Withdrawn          # invoice provided is not applicable
+  - Pending            # working to obtain carrier information / finalize
+  - Partially Obtained # decided not to pursue the missing information
+
+# Charge type for each line item.
+charge_type:
+  - MRC               # monthly recurring
+  - NRC               # non-recurring (one-time)
+  - OCC               # other credit / charges
+  - Prorated Charges
+  - Surcharge
+  - Taxes
+  - Usage
+  # Informal tag for aggregated subtotal rows (Recurring Charges total,
+  # Total Monthly Service, BALANCE DUE, etc). Not in the customer's
+  # original dropdown but added because the inventory captures them as
+  # their own rows. Kept here so normalization doesn't reject them.
+  - Subtotal
+
+# Row classification.
+service_or_component:
+  - S         # main service line (without taxes/surcharges)
+  - C         # component under a service
+  - U         # usage fees
+  - T\S\OCC   # taxes / surcharges / other credit and charges
+
+# Yes/No for the contract MTM flag.
+currently_month_to_month:
+  - "Yes"
+  - "No"
+
+# Same yes/no for the related "MTM or less than 1 year" flag.
+mtm_or_less_than_year:
+  - "Yes"
+  - "No"
+
+# Auto-renew also yes/no.
+auto_renew:
+  - "Yes"
+  - "No"
+
+# contract_info_received populated by backend/api/uploads.py from upload
+# doc-types: "Yes" if a contract is on file, "Email" if only emails,
+# "No" otherwise. Listed here so analysts and exports treat it as a
+# constrained vocabulary.
+contract_info_received:
+  - "Yes"
+  - "Email"
+  - "No"
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Free-form → canonical mapping. The normalizer applies these case-
+# insensitively. Add entries here as common LLM variants surface.
+# ────────────────────────────────────────────────────────────────────────
+synonyms:
+  charge_type:
+    "tax": "Taxes"
+    "tax/fee": "Taxes"
+    "regulatory": "Surcharge"
+    "regulatory fee": "Surcharge"
+    "fees": "Surcharge"
+    "non-recurring": "NRC"
+    "non recurring": "NRC"
+    "one-time": "NRC"
+    "one time": "NRC"
+    "monthly": "MRC"
+    "recurring": "MRC"
+    "credit": "OCC"
+    "adjustment": "OCC"
+    "adjustments": "OCC"
+    "prorated": "Prorated Charges"
+    "proration": "Prorated Charges"
+  service_or_component:
+    "service": "S"
+    "component": "C"
+    "feature": "C"
+    "usage": "U"
+    "tax": "T\\S\\OCC"
+    "surcharge": "T\\S\\OCC"
+  status:
+    "active": "Complete"
+    "done": "Complete"
+    "completed": "Complete"
+    "in progress": "Pending"
+    "in-progress": "Pending"
+    "needs review": "Pending"
+    "review": "Pending"
+    "n/a": "Withdrawn"
+    "na": "Withdrawn"
+    "not applicable": "Withdrawn"
+    "skipped": "Withdrawn"
+    "partial": "Partially Obtained"
+  currently_month_to_month:
+    "y": "Yes"
+    "true": "Yes"
+    "n": "No"
+    "false": "No"
+  auto_renew:
+    "y": "Yes"
+    "true": "Yes"
+    "n": "No"
+    "false": "No"
+  mtm_or_less_than_year:
+    "y": "Yes"
+    "true": "Yes"
+    "n": "No"
+    "false": "No"
