@@ -32,14 +32,12 @@ def _parse_iso(ts: str | None) -> datetime | None:
 async def get_live():
     """Real-time operational state — active projects, spend, carriers, bin.
 
-    Pulls from Redis + spend ledger + config store (no Postgres dependency),
-    so it works even before any extractions have persisted.
+    Pulls from the durable Postgres uploads table (Phase B) + spend ledger +
+    config store. Includes deleted entries so we can count the bin.
     """
-    # Import locally to avoid circular deps with uploads.py
-    from backend.api.uploads import _get_redis, _upload_key
+    from backend.services import upload_store as us
 
-    r = _get_redis()
-    upload_ids = list(r.smembers("dd:uploads"))
+    uploads = await us.list_uploads(include_deleted=True)
 
     active_count = 0
     active_files_in_flight = 0
@@ -50,21 +48,14 @@ async def get_live():
 
     now = datetime.now(timezone.utc)
 
-    for uid in upload_ids:
-        raw = r.get(_upload_key(uid))
-        if not raw:
-            continue
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
+    for data in uploads:
         status = data.get("status", "")
         if data.get("deleted_at"):
             bin_count += 1
             continue
-        if status in ("extracting", "classifying", "cancel_requested"):
+        if status in ("extracting", "classifying", "cancel_requested", "merging"):
             active_count += 1
-            files = data.get("file_assignments", data.get("classified", []))
+            files = data.get("file_assignments") or data.get("classified") or []
             active_files_in_flight += len(files)
             started = _parse_iso(data.get("created_at"))
             if started and (oldest_active_started is None or started < oldest_active_started):

@@ -69,11 +69,15 @@ class Upload(Base):
     __tablename__ = "uploads"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # short_id is the user-facing 8-char hex identifier (matches the legacy
+    # Redis key shape). UUID id remains the relational primary key.
+    short_id: Mapped[str | None] = mapped_column(String(8), unique=True, index=True)
     name: Mapped[str | None] = mapped_column(String(255))
     client_name: Mapped[str | None] = mapped_column(String(255))  # free text, kept for backward compat
     client_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("clients.id", ondelete="SET NULL"), nullable=True
     )
+    description: Mapped[str | None] = mapped_column(Text)
     uploaded_by: Mapped[str | None] = mapped_column(String(255))
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     status: Mapped[str] = mapped_column(String(50), default="pending")
@@ -82,6 +86,20 @@ class Upload(Base):
     # Soft-delete / bin
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     bin_retention_days: Mapped[int] = mapped_column(Integer, default=30)
+    # Durable upload state (Phase B): previously held in Redis JSON blobs.
+    # Now persisted in Postgres so project_name + classifications + results
+    # survive Redis flushes, container restarts, and TTLs.
+    classified: Mapped[list] = mapped_column(JSONB, default=list)
+    file_assignments: Mapped[list] = mapped_column(JSONB, default=list)
+    files: Mapped[dict] = mapped_column(JSONB, default=dict)
+    results: Mapped[list] = mapped_column(JSONB, default=list)
+    raw_results: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    has_raw_results: Mapped[bool] = mapped_column(Boolean, default=False)
+    computed_carriers: Mapped[list] = mapped_column(JSONB, default=list)
+    rows_with_issues: Mapped[int] = mapped_column(Integer, default=0)
+    rows_error_level: Mapped[int] = mapped_column(Integer, default=0)
+    unique_accounts: Mapped[int] = mapped_column(Integer, default=0)
+    rows_needing_carrier_validation: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

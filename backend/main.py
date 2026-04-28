@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Startup: detect extractions stuck from a previous server crash
     from backend.api.uploads import detect_stuck_extractions
-    detect_stuck_extractions()
+    await detect_stuck_extractions()
     logger.info("Startup complete — stuck extraction check done")
     yield
 

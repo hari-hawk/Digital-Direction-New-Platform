@@ -25,9 +25,13 @@ CREATE TABLE clients (
 
 CREATE TABLE uploads (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    -- short_id is the user-facing 8-char hex id used in URLs and the
+    -- frontend. UUID id stays as the relational PK; short_id is the lookup.
+    short_id VARCHAR(8) UNIQUE,
     name VARCHAR(255),
     client_name VARCHAR(255),         -- kept as free text for backward compat
     client_id UUID REFERENCES clients(id) ON DELETE SET NULL,
+    description TEXT,
     uploaded_by VARCHAR(255),
     uploaded_at TIMESTAMP DEFAULT NOW(),
     status VARCHAR(50) DEFAULT 'pending',
@@ -36,11 +40,28 @@ CREATE TABLE uploads (
     -- Soft-delete / bin
     deleted_at TIMESTAMP NULL,
     bin_retention_days INT DEFAULT 30,
+    -- Durable upload state (Phase B, Apr-2026): moved out of Redis so
+    -- project_name + classifications + results survive container restarts,
+    -- TTLs, and Redis flushes. Redis is now used only for the live
+    -- files_processed counter during extraction.
+    classified        JSONB DEFAULT '[]'::jsonb,    -- [{filename, carrier, doc_type, format_variant, file_size}]
+    file_assignments  JSONB DEFAULT '[]'::jsonb,    -- [{filename, carrier}] from user review
+    files             JSONB DEFAULT '{}'::jsonb,    -- {filename: storage_path}
+    results           JSONB DEFAULT '[]'::jsonb,    -- merged extracted rows
+    raw_results       JSONB,                        -- pre-merge results (for the "raw" toggle)
+    has_raw_results   BOOLEAN DEFAULT FALSE,
+    computed_carriers JSONB DEFAULT '[]'::jsonb,    -- carrier names derived from extracted rows
+    rows_with_issues             INT DEFAULT 0,
+    rows_error_level             INT DEFAULT 0,
+    unique_accounts              INT DEFAULT 0,
+    rows_needing_carrier_validation INT DEFAULT 0,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX idx_uploads_deleted_at ON uploads(deleted_at);
 CREATE INDEX idx_uploads_client ON uploads(client_id);
+-- Already declared inline as UNIQUE on the column, but the migration also
+-- creates this index by name for IF-NOT-EXISTS safety. Both names align.
 
 -- ============================================
 -- Client reference data — analyst-confirmed authoritative facts per client.

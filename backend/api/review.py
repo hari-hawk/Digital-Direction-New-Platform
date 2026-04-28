@@ -273,12 +273,21 @@ async def submit_correction(
     # future uploads for the same client inherit it. No-op when no client is
     # linked to the upload (legacy rows).
     try:
-        # Resolve client_id via the upload Redis state (upload_id is on the run)
+        # Resolve client_id via the durable Postgres uploads row. row.upload_id
+        # is the FK on extracted_rows; the legacy short_id lives in
+        # ExtractionRun.config_version when upload_id is None (older rows).
         client_id = None
         if row.upload_id:
-            from backend.api.uploads import _get_upload as _get_up
-            up = _get_up(str(row.upload_id))
-            client_id = up.get("client_id") if up else None
+            from backend.models.orm import Upload as UploadOrm
+            up_row = (await db.execute(select(UploadOrm).where(UploadOrm.id == row.upload_id))).scalar_one_or_none()
+            client_id = str(up_row.client_id) if up_row and up_row.client_id else None
+        if not client_id and row.extraction_run_id:
+            # Fallback: look up via the run's config_version (short_id).
+            from backend.services import upload_store as us
+            er = (await db.execute(select(ExtractionRun).where(ExtractionRun.id == row.extraction_run_id))).scalar_one_or_none()
+            if er and er.config_version:
+                up = await us.get_upload(er.config_version)
+                client_id = up.get("client_id") if up else None
         if client_id:
             from backend.services.master_data import store_correction_to_master_data
             def _store(sync_session):

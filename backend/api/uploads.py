@@ -1,6 +1,12 @@
 """Upload API — file upload, classification, extraction pipeline.
 
-Upload state is persisted in Redis so it survives page refreshes and server restarts.
+Upload state lives in Postgres (Phase B refactor, Apr-2026). Redis is now
+used only for the live `files_processed` counter during extraction; everything
+else — project name, classifications, results, bin status — is durable.
+
+The seven thin helpers below are async wrappers over `backend.services.upload_store`.
+They keep the existing call sites in this file readable (one-line awaits) and
+preserve the `(short) upload_id` dict keys the frontend has always seen.
 """
 
 import uuid
@@ -14,7 +20,6 @@ from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
-import redis
 
 from backend.settings import settings
 from backend.config_loader import get_config_store
@@ -23,217 +28,86 @@ from backend.pipeline.parser import parse_document
 from backend.pipeline.extractor import extract_document, score_confidence
 from backend.models.database import async_session
 from backend.models.orm import ExtractionRun, ExtractedRow as ExtractedRowDB
+from backend.services import upload_store as us
 
 logger = logging.getLogger(__name__)
 
 
 # ============================================
-# Redis-backed upload storage
+# Postgres-backed upload state (Phase B)
+#
+# Thin async wrappers around upload_store. Every helper returns the same
+# dict shape the legacy Redis-backed helpers used, so call sites only had
+# to gain an `await`.
 # ============================================
 
-_redis: redis.Redis | None = None
+
+async def _save_upload(upload_id: str, data: dict) -> None:
+    """Insert (or upsert) the upload row keyed by short_id."""
+    await us.save_upload(upload_id, data)
 
 
-def _get_redis() -> redis.Redis:
-    global _redis
-    if _redis is None:
-        _redis = redis.from_url(settings.redis_url, decode_responses=True)
-    return _redis
+async def _get_upload(upload_id: str) -> dict | None:
+    return await us.get_upload(upload_id)
 
 
-def _upload_key(upload_id: str) -> str:
-    return f"dd:upload:{upload_id}"
+async def _get_raw_results(upload_id: str) -> list | None:
+    return await us.get_raw_results(upload_id)
 
 
-def _save_upload(upload_id: str, data: dict) -> None:
-    """Save upload state to Redis. Results stored separately to keep hash small.
+async def _update_upload_field(upload_id: str, **fields) -> None:
+    await us.update_upload_field(upload_id, **fields)
 
-    NO TTL — upload state is small (a few KB per project) and persists
-    indefinitely. Earlier 24h TTL caused project_name + client_name to silently
-    disappear after a day, with the disk-folder bootstrap then recreating the
-    Redis entry with empty names. Cleanup happens via the Bin (soft-delete →
-    purge), not via expiry.
+
+async def _update_upload_results(upload_id: str, results: list) -> None:
+    await us.update_upload_results(upload_id, results)
+
+
+async def _list_uploads(include_deleted: bool = False, only_deleted: bool = False) -> list[dict]:
+    """List uploads, ordered by created_at desc.
+
+    Uses the Postgres-backed upload_store (Phase B). Soft-deleted uploads
+    are hidden by default; pass only_deleted=True for the bin or
+    include_deleted=True for both.
+
+    NOTE: unlike the previous implementation, this does NOT silently
+    bootstrap fresh entries for orphaned disk folders — that was the second
+    half of the "(unnamed) uploads" bug. Use POST /api/uploads/orphans to
+    surface unlinked disk folders explicitly.
     """
-    r = _get_redis()
-    results = data.pop("results", [])
-    r.set(_upload_key(upload_id), json.dumps(data))
-    r.set(f"{_upload_key(upload_id)}:results", json.dumps(results))
-    # Track in uploads index
-    r.sadd("dd:uploads", upload_id)
-
-
-def _get_upload(upload_id: str) -> dict | None:
-    """Load upload state from Redis."""
-    r = _get_redis()
-    raw = r.get(_upload_key(upload_id))
-    if not raw:
-        return None
-    data = json.loads(raw)
-    results_raw = r.get(f"{_upload_key(upload_id)}:results")
-    data["results"] = json.loads(results_raw) if results_raw else []
-    # Check if raw (pre-merge) results exist
-    raw_results = r.get(f"{_upload_key(upload_id)}:results:raw")
-    data["has_raw_results"] = raw_results is not None
-    return data
-
-
-def _get_raw_results(upload_id: str) -> list | None:
-    """Load pre-merge raw results from Redis."""
-    r = _get_redis()
-    raw = r.get(f"{_upload_key(upload_id)}:results:raw")
-    return json.loads(raw) if raw else None
-
-
-def _update_upload_field(upload_id: str, **fields) -> None:
-    """Update specific fields on an upload without rewriting results."""
-    r = _get_redis()
-    raw = r.get(_upload_key(upload_id))
-    if not raw:
-        return
-    data = json.loads(raw)
-    data.update(fields)
-    r.set(_upload_key(upload_id), json.dumps(data))  # no TTL — persist indefinitely
-
-
-def _update_upload_results(upload_id: str, results: list) -> None:
-    """Update just the results list."""
-    r = _get_redis()
-    r.set(f"{_upload_key(upload_id)}:results", json.dumps(results))  # no TTL — persist indefinitely
-
-
-def _list_uploads(include_deleted: bool = False, only_deleted: bool = False) -> list[dict]:
-    """List all uploads from disk, enriched with Redis state where available.
-
-    Disk (storage/temp/) is the source of truth for which uploads exist.
-    Redis provides active state (status, progress, results, classified metadata).
-    Uploads without Redis entries are shown with files discovered from disk.
-
-    Soft-deleted uploads (with deleted_at timestamp) are excluded by default.
-    Pass only_deleted=True to list the bin; include_deleted=True to get both.
-    """
-    r = _get_redis()
-    temp_dir = Path(settings.storage_base_dir) / "temp"
-    uploads = []
-    seen_ids = set()
-
-    # First: all uploads that have Redis state
-    redis_ids = r.smembers("dd:uploads")
-    for uid in redis_ids:
-        raw = r.get(_upload_key(uid))
-        if not raw:
-            r.srem("dd:uploads", uid)
-            continue
-        data = json.loads(raw)
-        is_deleted = bool(data.get("deleted_at"))
-        if is_deleted and not (include_deleted or only_deleted):
-            seen_ids.add(uid)
-            continue
-        if only_deleted and not is_deleted:
-            seen_ids.add(uid)
-            continue
-        results_raw = r.get(f"{_upload_key(uid)}:results")
-        result_count = len(json.loads(results_raw)) if results_raw else 0
-        # Carriers from classify stage (may contain "Unknown" while extraction pending).
-        # Prefer computed_carriers (from actual row data) when available — those
-        # reflect the LLM-detected carrier names and avoid "Unknown" labels.
+    rows = await us.list_uploads(include_deleted=include_deleted, only_deleted=only_deleted)
+    out = []
+    for data in rows:
+        # Card-friendly carrier set: prefer post-extraction computed_carriers,
+        # fall back to classify-stage names (skipping "Unknown").
         classified_carriers = sorted({
             c.get("carrier") for c in data.get("classified", [])
-            if c.get("carrier") and c.get("carrier").lower() != "unknown"
+            if c.get("carrier") and (c.get("carrier") or "").lower() != "unknown"
         })
         computed_carriers = data.get("computed_carriers") or []
-        uploads.append({
-            "upload_id": uid,
+        out.append({
+            "upload_id": data["upload_id"],
             "project_name": data.get("project_name", ""),
             "client_name": data.get("client_name", ""),
             "status": data.get("status", "unknown"),
-            "total_rows": result_count,
-            "files_total": len(data.get("file_assignments", data.get("classified", []))),
+            "total_rows": len(data.get("results", [])),
+            "files_total": len(data.get("file_assignments") or data.get("classified") or []),
             "files_processed": data.get("files_processed", 0),
             "created_at": data.get("created_at", ""),
             "deleted_at": data.get("deleted_at"),
             "classified": data.get("classified", []),
-            # Richer card stats — zero when not yet computed (pending extraction).
             "rows_with_issues": data.get("rows_with_issues", 0),
             "rows_error_level": data.get("rows_error_level", 0),
             "unique_accounts": data.get("unique_accounts", 0),
             "rows_needing_carrier_validation": data.get("rows_needing_carrier_validation", 0),
-            # Effective carrier list: post-extraction names when available; else classify stage.
             "carriers": computed_carriers or classified_carriers,
         })
-        seen_ids.add(uid)
-
-    # Second: disk folders without Redis entries (pre-Redis uploads or expired keys)
-    if temp_dir.exists():
-        for folder in sorted(temp_dir.iterdir(), reverse=True):
-            if not folder.is_dir() or folder.name in seen_ids:
-                continue
-            # Discover files on disk and build a minimal classified list
-            disk_files = []
-            for f in sorted(folder.iterdir()):
-                if f.is_file() and not f.name.startswith("."):
-                    disk_files.append({
-                        "filename": f.name,
-                        "carrier": None,
-                        "doc_type": None,
-                        "format_variant": None,
-                        "file_size": f.stat().st_size,
-                    })
-            if not disk_files:
-                continue
-            # Classify these files to get carrier/doc_type
-            for cf in disk_files:
-                stage_a = classify_by_filename(cf["filename"])
-                stage_b = classify_by_content(str(folder / cf["filename"]))
-                carrier_key = stage_b.carrier or stage_a.carrier
-                cf["carrier"] = _carrier_key_to_display(carrier_key)
-                cf["doc_type"] = stage_b.document_type or stage_a.document_type
-                cf["format_variant"] = stage_b.format_variant
-
-            # Bootstrap Redis entry so future operations (extract, delete) work
-            import os
-            from datetime import datetime, timezone
-            folder_mtime = datetime.fromtimestamp(folder.stat().st_mtime, tz=timezone.utc)
-            saved_files = {f["filename"]: str(folder / f["filename"]) for f in disk_files}
-            _save_upload(folder.name, {
-                "project_name": "",
-                "client_name": "",
-                "description": "",
-                "files": saved_files,
-                "classified": disk_files,
-                "status": "classified",
-                "created_at": folder_mtime.isoformat(),
-                "results": [],
-            })
-
-            uploads.append({
-                "upload_id": folder.name,
-                "project_name": "",
-                "client_name": "",
-                "status": "classified",
-                "total_rows": 0,
-                "files_total": len(disk_files),
-                "files_processed": 0,
-                "created_at": folder_mtime.isoformat(),
-                "classified": disk_files,
-            })
-
-    # Sort by created_at descending
-    uploads.sort(key=lambda u: u.get("created_at", ""), reverse=True)
-    return uploads
+    return out
 
 
-def _delete_upload(upload_id: str) -> bool:
-    """Delete upload from Redis and clean up temp files on disk."""
-    r = _get_redis()
-    r.delete(_upload_key(upload_id))
-    r.delete(f"{_upload_key(upload_id)}:results")
-    r.srem("dd:uploads", upload_id)
-    # Clean up temp files
-    import shutil
-    upload_dir = Path(settings.storage_base_dir) / "temp" / upload_id
-    if upload_dir.exists():
-        shutil.rmtree(upload_dir)
-    return True
+async def _delete_upload(upload_id: str) -> bool:
+    """Hard-delete: removes the DB row, the live counter, and on-disk files."""
+    return await us.hard_delete_upload(upload_id)
 
 
 # ============================================
@@ -370,13 +244,24 @@ class ExtractedRowResponse(BaseModel):
 @router.get("")
 async def list_uploads(include_deleted: bool = False):
     """List active uploads. Pass include_deleted=true to get both active and deleted."""
-    return {"uploads": _list_uploads(include_deleted=include_deleted)}
+    return {"uploads": await _list_uploads(include_deleted=include_deleted)}
 
 
 @router.get("/bin")
 async def list_bin():
     """List soft-deleted uploads (projects in the bin)."""
-    return {"uploads": _list_uploads(only_deleted=True)}
+    return {"uploads": await _list_uploads(only_deleted=True)}
+
+
+@router.get("/orphans")
+async def list_orphans():
+    """Disk folders in storage/temp/ that have no DB row.
+
+    Surfaced explicitly (not silently bootstrapped) so an admin can decide
+    whether to re-link, rename, or purge each one. Replaces the silent
+    disk-bootstrap path that caused the original "(unnamed) uploads" bug.
+    """
+    return {"orphans": await us.find_orphan_disk_folders()}
 
 
 @router.post("/classify", response_model=ClassifyResponse)
@@ -469,9 +354,9 @@ async def classify_upload(
         except Exception as e:
             logger.warning(f"Client find-or-create failed for {client_name!r}: {e}")
 
-    # Store upload state in Redis
+    # Persist upload state to Postgres (Phase B). Survives restarts/redeploys.
     from datetime import datetime, timezone
-    _save_upload(upload_id, {
+    await _save_upload(upload_id, {
         "project_name": project_name,
         "client_name": client_name,
         "client_id": client_id,
@@ -489,14 +374,14 @@ async def classify_upload(
 @router.post("/extract")
 async def extract_upload(request: ExtractRequest, background_tasks: BackgroundTasks):
     """Start extraction for selected files with user's carrier assignments."""
-    upload = _get_upload(request.upload_id)
+    upload = await _get_upload(request.upload_id)
     if not upload:
         return JSONResponse(status_code=404, content={"error": "Upload not found"})
 
-    _update_upload_field(request.upload_id,
-                         status="extracting",
-                         file_assignments=[dict(f) for f in request.files],
-                         files_processed=0)
+    await _update_upload_field(request.upload_id,
+                               status="extracting",
+                               file_assignments=[dict(f) for f in request.files],
+                               files_processed=0)
 
     # Run extraction in background
     background_tasks.add_task(_run_extraction, request.upload_id, request.files)
@@ -507,7 +392,7 @@ async def extract_upload(request: ExtractRequest, background_tasks: BackgroundTa
 @router.get("/{upload_id}/status")
 async def get_status(upload_id: str):
     """Poll extraction progress."""
-    upload = _get_upload(upload_id)
+    upload = await _get_upload(upload_id)
     if not upload:
         return JSONResponse(status_code=404, content={"error": "Upload not found"})
 
@@ -523,12 +408,12 @@ async def get_status(upload_id: str):
 @router.get("/{upload_id}/results")
 async def get_results(upload_id: str, view: str | None = None):
     """Get extracted rows for this upload. ?view=raw returns pre-merge results."""
-    upload = _get_upload(upload_id)
+    upload = await _get_upload(upload_id)
     if not upload:
         return JSONResponse(status_code=404, content={"error": "Upload not found"})
 
     if view == "raw":
-        raw_results = _get_raw_results(upload_id)
+        raw_results = await _get_raw_results(upload_id)
         if raw_results is not None:
             return {
                 "upload_id": upload_id,
@@ -572,7 +457,7 @@ async def download_all_files(upload_id: str):
         return JSONResponse(status_code=404, content={"error": "No files on disk for this upload"})
 
     buf.seek(0)
-    upload = _get_upload(upload_id)
+    upload = await _get_upload(upload_id)
     project_name = (upload.get("project_name") if upload else None) or upload_id
     safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in project_name)
     from fastapi.responses import StreamingResponse
@@ -606,12 +491,12 @@ async def get_file(upload_id: str, filename: str):
 @router.post("/{upload_id}/cancel")
 async def cancel_extraction(upload_id: str):
     """Request cancellation of an in-progress extraction."""
-    upload = _get_upload(upload_id)
+    upload = await _get_upload(upload_id)
     if not upload:
         return JSONResponse(status_code=404, content={"error": "Upload not found"})
     if upload["status"] != "extracting":
         return JSONResponse(status_code=400, content={"error": f"Cannot cancel upload in status '{upload['status']}'"})
-    _update_upload_field(upload_id, status="cancel_requested")
+    await _update_upload_field(upload_id, status="cancel_requested")
     return {"upload_id": upload_id, "status": "cancel_requested"}
 
 
@@ -619,7 +504,7 @@ async def cancel_extraction(upload_id: str):
 async def retry_extraction(upload_id: str, background_tasks: BackgroundTasks):
     """Re-run extraction on a project — allowed for completed runs too so users
     can re-extract after prompt/config updates. Not allowed while a run is in progress."""
-    upload = _get_upload(upload_id)
+    upload = await _get_upload(upload_id)
     if not upload:
         return JSONResponse(status_code=404, content={"error": "Upload not found"})
     if upload["status"] in ("extracting", "classifying", "cancel_requested"):
@@ -627,8 +512,8 @@ async def retry_extraction(upload_id: str, background_tasks: BackgroundTasks):
     file_assignments = upload.get("file_assignments") or upload.get("classified", [])
     if not file_assignments:
         return JSONResponse(status_code=400, content={"error": "No file assignments found — re-upload the files"})
-    _update_upload_field(upload_id, status="extracting", files_processed=0)
-    _update_upload_results(upload_id, [])
+    await _update_upload_field(upload_id, status="extracting", files_processed=0)
+    await _update_upload_results(upload_id, [])
     background_tasks.add_task(_run_extraction, upload_id, file_assignments)
     return {"upload_id": upload_id, "status": "extracting"}
 
@@ -636,42 +521,42 @@ async def retry_extraction(upload_id: str, background_tasks: BackgroundTasks):
 @router.delete("/{upload_id}")
 async def delete_upload(upload_id: str):
     """Soft-delete an upload (moves it to the bin). Data is preserved and can be restored or purged."""
-    upload = _get_upload(upload_id)
+    upload = await _get_upload(upload_id)
     if not upload:
         return JSONResponse(status_code=404, content={"error": "Upload not found"})
     if upload["status"] == "extracting":
         return JSONResponse(status_code=400, content={"error": "Cannot delete while extracting. Cancel first."})
     from datetime import datetime, timezone
-    _update_upload_field(upload_id, deleted_at=datetime.now(timezone.utc).isoformat())
-    # Remove Redis TTL so binned items survive past the active-upload expiry
-    r = _get_redis()
-    r.persist(_upload_key(upload_id))
-    r.persist(f"{_upload_key(upload_id)}:results")
+    await _update_upload_field(upload_id, deleted_at=datetime.now(timezone.utc).isoformat())
     return {"upload_id": upload_id, "deleted": True, "soft": True}
 
 
 @router.post("/{upload_id}/restore")
 async def restore_upload(upload_id: str):
     """Restore a soft-deleted upload from the bin."""
-    upload = _get_upload(upload_id)
+    upload = await _get_upload(upload_id)
     if not upload:
         return JSONResponse(status_code=404, content={"error": "Upload not found"})
     if not upload.get("deleted_at"):
         return JSONResponse(status_code=400, content={"error": "Upload is not in the bin"})
-    _update_upload_field(upload_id, deleted_at=None)
+    await _update_upload_field(upload_id, deleted_at=None)
     return {"upload_id": upload_id, "restored": True}
 
 
 @router.post("/{upload_id}/purge")
 async def purge_upload(upload_id: str):
-    """Permanently delete an upload — data cannot be recovered. Removes Redis, disk, and Postgres rows."""
-    upload = _get_upload(upload_id)
+    """Permanently delete an upload — data cannot be recovered. Removes the
+    Postgres row, the Redis live counter, on-disk files, and any related
+    extraction_runs/extracted_rows."""
+    upload = await _get_upload(upload_id)
     if not upload:
         return JSONResponse(status_code=404, content={"error": "Upload not found"})
     if upload["status"] == "extracting":
         return JSONResponse(status_code=400, content={"error": "Cannot purge while extracting. Cancel first."})
 
-    # Delete from PostgreSQL (extraction_runs cascade-deletes extracted_rows)
+    # Delete pipeline-side ExtractionRun rows that link back via config_version
+    # (legacy linkage from the Redis era — kept for backward compat with rows
+    # created before client_id linkage).
     try:
         from sqlalchemy import delete
         async with async_session() as session:
@@ -680,56 +565,60 @@ async def purge_upload(upload_id: str):
                     delete(ExtractionRun).where(ExtractionRun.config_version == upload_id)
                 )
     except Exception as e:
-        logger.error(f"Failed to delete PostgreSQL data for {upload_id}: {e}")
+        logger.error(f"Failed to delete PostgreSQL ExtractionRuns for {upload_id}: {e}")
 
-    # Delete from Redis + disk
-    _delete_upload(upload_id)
+    # Hard-delete the upload row, on-disk files, and Redis counter.
+    await _delete_upload(upload_id)
     return {"upload_id": upload_id, "purged": True}
 
 
 @router.post("/cleanup")
 async def cleanup_orphaned():
-    """Delete temp folders that have no corresponding Redis entry."""
+    """Delete on-disk temp folders that have no matching DB row.
+
+    Now backed by upload_store.find_orphan_disk_folders() — which is the
+    same data surfaced by GET /api/uploads/orphans. Use this endpoint when
+    you've already decided every orphan should be purged. For per-folder
+    decisions, call /orphans first.
+    """
     import shutil
-    temp_dir = Path(settings.storage_base_dir) / "temp"
-    if not temp_dir.exists():
-        return {"cleaned": 0}
-    r = _get_redis()
-    known_ids = r.smembers("dd:uploads")
+    orphans = await us.find_orphan_disk_folders()
     cleaned = 0
-    for folder in temp_dir.iterdir():
-        if folder.is_dir() and folder.name not in known_ids:
-            shutil.rmtree(folder)
+    for o in orphans:
+        try:
+            shutil.rmtree(o["path"])
             cleaned += 1
-            logger.info(f"Cleaned orphaned temp folder: {folder.name}")
+            logger.info("Cleaned orphaned temp folder: %s", o["short_id"])
+        except Exception as e:
+            logger.warning("Failed to clean orphan %s: %s", o["short_id"], e)
     return {"cleaned": cleaned}
 
 
 @router.post("/backfill-db")
 async def backfill_db():
-    """Migrate all existing Redis extraction results into PostgreSQL.
+    """Migrate completed extraction results into the typed extracted_rows table.
 
-    Safe to run multiple times — clears previous backfill data first.
+    Iterates every non-deleted upload (durable Postgres rows now, post Phase B)
+    and copies finished results into extracted_rows for analytics queries.
+    Idempotent — _persist_to_db handles dedupe.
     """
-    r = _get_redis()
-    upload_ids = r.smembers("dd:uploads")
+    uploads = await us.list_uploads(include_deleted=True)
     total_backfilled = 0
+    backfilled_uploads = 0
 
-    for uid in upload_ids:
-        upload = _get_upload(uid)
-        if not upload or upload.get("status") != "done":
+    for upload in uploads:
+        if upload.get("status") != "done":
             continue
-
         results = upload.get("results", [])
         if not results:
             continue
-
         files_processed = upload.get("files_processed", 0)
-        await _persist_to_db(uid, results, files_processed)
+        await _persist_to_db(upload["upload_id"], results, files_processed)
         total_backfilled += len(results)
-        logger.info(f"Backfilled {len(results)} rows for upload {uid}")
+        backfilled_uploads += 1
+        logger.info("Backfilled %d rows for upload %s", len(results), upload["upload_id"])
 
-    return {"backfilled_uploads": len([u for u in upload_ids if _get_upload(u) and _get_upload(u).get("status") == "done"]), "backfilled_rows": total_backfilled}
+    return {"backfilled_uploads": backfilled_uploads, "backfilled_rows": total_backfilled}
 
 
 # ============================================
@@ -744,7 +633,7 @@ async def merge_upload(upload_id: str, background_tasks: BackgroundTasks):
     Groups rows by carrier, runs merge + LLM conflict resolution,
     then replaces per-file rows with merged rows.
     """
-    upload = _get_upload(upload_id)
+    upload = await _get_upload(upload_id)
     if not upload:
         return JSONResponse(status_code=404, content={"error": "Upload not found"})
     if upload.get("status") != "done":
@@ -754,7 +643,7 @@ async def merge_upload(upload_id: str, background_tasks: BackgroundTasks):
     if not results:
         return JSONResponse(status_code=400, content={"error": "No extraction results to merge"})
 
-    _update_upload_field(upload_id, status="merging")
+    await _update_upload_field(upload_id, status="merging")
     background_tasks.add_task(_run_merge, upload_id)
     return {"upload_id": upload_id, "status": "merging"}
 
@@ -765,13 +654,13 @@ async def _run_merge(upload_id: str):
     from backend.models.schemas import ExtractedRow
 
     try:
-        upload = _get_upload(upload_id)
+        upload = await _get_upload(upload_id)
         results = upload.get("results", [])
         file_assignments = upload.get("file_assignments", [])
 
-        # Save raw results before merge (so user can toggle back)
-        r = _get_redis()
-        r.set(f"{_upload_key(upload_id)}:results:raw", json.dumps(results))  # no TTL — persist indefinitely
+        # Save raw results before merge (so user can toggle back to the per-file
+        # view in the UI). Stored on the same uploads row in Postgres.
+        await us.set_raw_results(upload_id, results)
 
         # Build doc_type lookup from file_assignments
         doc_type_map = {}
@@ -930,16 +819,16 @@ async def _run_merge(upload_id: str):
         except Exception as e:
             logger.warning(f"Post-merge validation/compliance skipped: {e}")
 
-        # Update Redis with merged results
-        _update_upload_results(upload_id, all_merged)
-        _update_upload_field(upload_id, status="done")
+        # Persist merged results to the durable uploads row.
+        await _update_upload_results(upload_id, all_merged)
+        await _update_upload_field(upload_id, status="done")
 
-        # Re-persist to PostgreSQL
+        # Re-persist to the typed extracted_rows table for analytics.
         await _persist_to_db(upload_id, all_merged, len(carrier_groups))
 
     except Exception as e:
         logger.error(f"Merge task crashed for {upload_id}: {e}")
-        _update_upload_field(upload_id, status="done")  # Revert to done, not error — original results still intact
+        await _update_upload_field(upload_id, status="done")  # Revert to done, not error — original results still intact
 
 
 # ============================================
@@ -947,22 +836,18 @@ async def _run_merge(upload_id: str):
 # ============================================
 
 
-def detect_stuck_extractions():
-    """On startup, mark any uploads stuck in 'extracting' as 'interrupted'."""
+async def detect_stuck_extractions() -> None:
+    """On startup, mark any uploads stuck in 'extracting' / 'cancel_requested'
+    / 'merging' as 'interrupted'. Now reads/writes the durable Postgres row
+    via upload_store, so it survives a Redis flush."""
     try:
-        r = _get_redis()
-        upload_ids = r.smembers("dd:uploads")
-        for uid in upload_ids:
-            raw = r.get(_upload_key(uid))
-            if not raw:
-                continue
-            data = json.loads(raw)
-            if data.get("status") in ("extracting", "cancel_requested"):
-                logger.warning(f"Upload {uid} was stuck in '{data['status']}', marking as interrupted")
-                data["status"] = "interrupted"
-                r.set(_upload_key(uid), json.dumps(data))  # no TTL — persist indefinitely
+        rows = await us.list_uploads(include_deleted=True)
+        for u in rows:
+            if u.get("status") in ("extracting", "cancel_requested", "merging"):
+                logger.warning("Upload %s was stuck in '%s', marking as interrupted", u["upload_id"], u["status"])
+                await us.update_upload_field(u["upload_id"], status="interrupted")
     except Exception as e:
-        logger.error(f"Failed to detect stuck extractions: {e}")
+        logger.error("Failed to detect stuck extractions: %s", e)
 
 
 # ============================================
@@ -971,11 +856,12 @@ def detect_stuck_extractions():
 
 
 async def _run_extraction(upload_id: str, file_assignments: list[dict]):
-    """Background task: parse → extract each file. Progress persisted to Redis."""
+    """Background task: parse → extract each file. Progress persisted to
+    Postgres (rows + status); files_processed counter routed to Redis."""
     try:
-        upload = _get_upload(upload_id)
+        upload = await _get_upload(upload_id)
         if not upload:
-            logger.error(f"Upload {upload_id} not found in Redis")
+            logger.error(f"Upload {upload_id} not found")
             return
 
         saved_files = upload["files"]
@@ -984,10 +870,10 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
 
         for assignment in file_assignments:
             # Check if cancel was requested
-            upload_check = _get_upload(upload_id)
+            upload_check = await _get_upload(upload_id)
             if upload_check and upload_check.get("status") == "cancel_requested":
-                _update_upload_field(upload_id, status="cancelled", files_processed=files_processed)
-                _update_upload_results(upload_id, all_rows)
+                await _update_upload_field(upload_id, status="cancelled", files_processed=files_processed)
+                await _update_upload_results(upload_id, all_rows)
                 logger.info(f"Upload {upload_id} cancelled after {files_processed} files")
                 return
 
@@ -1057,9 +943,10 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
                     all_rows.append(row_dict)
 
                 files_processed += 1
-                # Persist progress to Redis after each file
-                _update_upload_field(upload_id, files_processed=files_processed)
-                _update_upload_results(upload_id, all_rows)
+                # Persist progress after each file. files_processed routes to
+                # Redis (live counter); results write to Postgres jsonb.
+                await _update_upload_field(upload_id, files_processed=files_processed)
+                await _update_upload_results(upload_id, all_rows)
                 logger.info(f"  → {len(rows)} rows from {filename}")
 
             except Exception as e:
@@ -1103,7 +990,7 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
                     f"{needs_validation_count} rows need carrier validation, "
                     f"{unique_accounts} unique accounts, names={computed_carriers}")
 
-        _update_upload_field(
+        await _update_upload_field(
             upload_id,
             status="done",
             files_processed=files_processed,
@@ -1113,15 +1000,15 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
             computed_carriers=computed_carriers,
             rows_needing_carrier_validation=needs_validation_count,
         )
-        _update_upload_results(upload_id, all_rows)
+        await _update_upload_results(upload_id, all_rows)
         logger.info(f"Upload {upload_id} complete: {len(all_rows)} total rows from {files_processed} files")
 
-        # Persist to PostgreSQL for permanent storage
+        # Persist to the typed extracted_rows table for analytics queries.
         await _persist_to_db(upload_id, all_rows, files_processed)
 
     except Exception as e:
         logger.error(f"Extraction task crashed for {upload_id}: {e}")
-        _update_upload_field(upload_id, status="error")
+        await _update_upload_field(upload_id, status="error")
 
 
 async def _persist_to_db(upload_id: str, rows: list[dict], files_processed: int):
