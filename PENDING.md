@@ -195,6 +195,22 @@ Validation UX (flagging mismatches) is another ~2-3 days.
 - Decision made today: we do NOT auto-register. Unknown carriers stay as
   `Validate carrier` status, analyst confirms + registers manually.
 - Revisit if analyst workload becomes the bottleneck.
+- **Update Apr 28:** decision reversed — auto-register is now live (commit
+  `4f3dc98`). New carriers get a minimal `carrier.yaml` written + the config
+  store hot-reloaded the moment the LLM detects them.
+
+### 4.5 Autoresearch loop — autonomous prompt improvement (parked, post-PoC)
+- Adopt karpathy/autoresearch's pattern for our extraction quality: an
+  agent picks a prompt-tuning idea, runs the eval harness, keeps-or-reverts
+  based on a single number metric, logs to flat-file history, repeats
+  overnight.
+- **Status:** parked. Pick up after PoC stabilizes.
+- **Design doc:** [`docs/research/autoresearch-todo.md`](docs/research/autoresearch-todo.md)
+  — has the full work breakdown (~3 days to MVP), patterns to borrow vs.
+  not borrow, and acceptance criteria.
+- **Why this matters post-PoC:** with 67 carriers in the registry, prompt
+  tuning is the largest accuracy lever we haven't automated. An overnight
+  run could compress weeks of manual iteration.
 
 ---
 
