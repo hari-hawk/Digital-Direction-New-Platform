@@ -99,13 +99,30 @@ const ALL_COLUMNS: { key: string; label: string }[] = [
   { key: "contract_number_2", label: "Contract #2" },
   { key: "auto_renew", label: "Auto Renew" },
   { key: "auto_renewal_notes", label: "Auto-Renew Notes" },
-  // Status
+  // Status + audit
   { key: "status", label: "Status" },
+  { key: "compliance_flags", label: "Compliance" },
   { key: "notes", label: "Notes" },
   { key: "contract_info_received", label: "Contract Info Received" },
   { key: "files_used", label: "Files Used" },
   { key: "confidence", label: "Confidence" },
 ];
+
+// Severity → tailwind class for the compliance badge.
+const _COMPL_SEVERITY_STYLE: Record<string, { fg: string; bg: string; bd: string }> = {
+  error:   { fg: "text-rose-300",  bg: "bg-rose-500/15",  bd: "border-rose-500/30" },
+  warning: { fg: "text-amber-300", bg: "bg-amber-500/15", bd: "border-amber-500/30" },
+  info:    { fg: "text-sky-300",   bg: "bg-sky-500/15",   bd: "border-sky-500/30" },
+};
+
+// Human-readable label per check (matches backend/pipeline/compliance.py).
+const _COMPL_CHECK_LABEL: Record<string, string> = {
+  rate_mismatch:      "rate mismatch",
+  expired_contract:   "expired contract",
+  mtm_inconsistency:  "MTM inconsistency",
+  term_date_mismatch: "term/date mismatch",
+  no_contract:        "no contract",
+};
 
 interface ResultsPageProps {
   onReviewRow?: (rowId: string) => void;
@@ -127,7 +144,7 @@ export function ResultsPage({ onReviewRow, onBack }: ResultsPageProps) {
   const [rawRows, setRawRows] = useState<ExtractedRow[] | null>(null);
   const [hasMerged, setHasMerged] = useState(false);
   const [columnView, setColumnView] = useState<"compact" | "all">("compact");
-  const [validationFilter, setValidationFilter] = useState<"all" | "needs-review" | "clean">("all");
+  const [validationFilter, setValidationFilter] = useState<"all" | "needs-review" | "clean" | "compliance">("all");
 
   // Check if merged results exist
   useEffect(() => {
@@ -163,6 +180,13 @@ export function ResultsPage({ onReviewRow, onBack }: ResultsPageProps) {
         const issues = (r as Record<string, unknown>).validation_issues as unknown[] | undefined;
         const status = (r as Record<string, unknown>).status as string | undefined;
         return (!issues || issues.length === 0) && status !== "Needs Review";
+      });
+    } else if (validationFilter === "compliance") {
+      // Surface only rows the post-merge audit flagged (rate mismatch,
+      // expired contract, MTM inconsistency, term/date mismatch, no contract).
+      data = data.filter((r) => {
+        const flags = (r as Record<string, unknown>).compliance_flags as unknown[] | undefined;
+        return Array.isArray(flags) && flags.length > 0;
       });
     }
     if (sortField) {
@@ -441,11 +465,12 @@ export function ResultsPage({ onReviewRow, onBack }: ResultsPageProps) {
               <SelectItem value="low">Low</SelectItem>
             </SelectContent>
           </Select>
-          <Select value={validationFilter} onValueChange={(v) => setValidationFilter((v as "all" | "needs-review" | "clean") ?? "all")}>
-            <SelectTrigger className="w-40 h-9"><SelectValue placeholder="Validation" /></SelectTrigger>
+          <Select value={validationFilter} onValueChange={(v) => setValidationFilter((v as "all" | "needs-review" | "clean" | "compliance") ?? "all")}>
+            <SelectTrigger className="w-44 h-9"><SelectValue placeholder="Validation" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All rows</SelectItem>
               <SelectItem value="needs-review">Needs review</SelectItem>
+              <SelectItem value="compliance">Compliance flagged</SelectItem>
               <SelectItem value="clean">Clean</SelectItem>
             </SelectContent>
           </Select>
@@ -499,6 +524,14 @@ export function ResultsPage({ onReviewRow, onBack }: ResultsPageProps) {
                 const errorIssues = issues?.filter((i) => i?.severity === "error") ?? [];
                 const needsValidation = status === "Validate carrier";
                 const needsReview = status === "Needs Review" || errorIssues.length > 0 || needsValidation;
+                const complianceFlags = (Array.isArray((row as Record<string, unknown>).compliance_flags)
+                    ? ((row as Record<string, unknown>).compliance_flags as Array<{check?: string; severity?: string; message?: string}>)
+                    : []);
+                const worstSeverity = complianceFlags.some((f) => f?.severity === "error")
+                    ? "error"
+                    : complianceFlags.some((f) => f?.severity === "warning")
+                        ? "warning"
+                        : (complianceFlags.length ? "info" : null);
                 return (
                   <TableRow
                     key={row.id}
@@ -517,7 +550,7 @@ export function ResultsPage({ onReviewRow, onBack }: ResultsPageProps) {
                     <TableCell className="max-w-[180px] truncate">{row.component_or_feature_name || "—"}</TableCell>
                     <TableCell className="text-right font-mono">{row.monthly_recurring_cost != null ? `$${Number(row.monthly_recurring_cost).toFixed(2)}` : "—"}</TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1 flex-wrap">
                         <Badge className={row.row_type === "S" ? "bg-blue-500/20 text-blue-400 text-[10px]" : "bg-violet-500/20 text-violet-400 text-[10px]"}>
                           {row.row_type}
                         </Badge>
@@ -531,6 +564,24 @@ export function ResultsPage({ onReviewRow, onBack }: ResultsPageProps) {
                                 : "Status: Needs Review")}
                           >
                             {needsValidation ? "Validate" : "Review"}
+                          </Badge>
+                        )}
+                        {worstSeverity && (
+                          <Badge
+                            className={`text-[10px] border ${
+                              worstSeverity === "error"
+                                ? "bg-rose-500/15 text-rose-300 border-rose-500/30"
+                                : worstSeverity === "warning"
+                                    ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
+                                    : "bg-sky-500/15 text-sky-300 border-sky-500/30"
+                            }`}
+                            title={complianceFlags
+                              .map((f) => `[${f.severity}] ${(_COMPL_CHECK_LABEL[f.check ?? ""] || f.check)}: ${f.message ?? ""}`)
+                              .join("\n")}
+                          >
+                            {complianceFlags.length === 1
+                              ? (_COMPL_CHECK_LABEL[complianceFlags[0].check ?? ""] || complianceFlags[0].check || "compliance")
+                              : `${complianceFlags.length} compliance`}
                           </Badge>
                         )}
                       </div>
@@ -578,6 +629,39 @@ export function ResultsPage({ onReviewRow, onBack }: ResultsPageProps) {
                     </TableCell>
                     {ALL_COLUMNS.map((col) => {
                       const raw = rec[col.key];
+
+                      // Custom render: compliance_flags is a list of {check, severity, message}.
+                      // Surface as severity-colored badges so the audit results are
+                      // visible at-a-glance rather than buried in the row JSON.
+                      if (col.key === "compliance_flags") {
+                        const flags = (Array.isArray(raw) ? raw : []) as Array<{ check?: string; severity?: string; message?: string }>;
+                        if (!flags.length) {
+                          return (
+                            <TableCell key={col.key} className="whitespace-nowrap text-xs text-muted-foreground/50" title="No compliance flags">—</TableCell>
+                          );
+                        }
+                        const tipLines = flags.map((f) => `[${f.severity ?? "info"}] ${f.check ?? ""}: ${f.message ?? ""}`);
+                        return (
+                          <TableCell key={col.key} className="whitespace-nowrap" title={tipLines.join("\n")}>
+                            <div className="flex items-center gap-1">
+                              {flags.slice(0, 3).map((f, i) => {
+                                const sev = (f.severity || "info") as keyof typeof _COMPL_SEVERITY_STYLE;
+                                const sty = _COMPL_SEVERITY_STYLE[sev] || _COMPL_SEVERITY_STYLE.info;
+                                const lbl = _COMPL_CHECK_LABEL[f.check ?? ""] || (f.check ?? "flag");
+                                return (
+                                  <span key={i} className={`text-[10px] px-1.5 py-0.5 rounded border ${sty.fg} ${sty.bg} ${sty.bd}`}>
+                                    {lbl}
+                                  </span>
+                                );
+                              })}
+                              {flags.length > 3 && (
+                                <span className="text-[10px] text-muted-foreground">+{flags.length - 3}</span>
+                              )}
+                            </div>
+                          </TableCell>
+                        );
+                      }
+
                       let display: string;
                       if (raw == null || raw === "") display = "—";
                       else if (col.key === "monthly_recurring_cost" || col.key === "ld_cost" || col.key === "cost_per_unit" || col.key === "mrc_per_currency" || col.key === "ld_flat_rate") {

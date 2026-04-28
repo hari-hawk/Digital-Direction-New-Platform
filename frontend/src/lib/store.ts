@@ -11,11 +11,23 @@ export interface UploadFile {
   pdfUrl?: string; // blob URL for PDF viewing
 }
 
+export interface ComplianceFlag {
+  // From backend/pipeline/compliance.py — one entry per detected billing-vs-contract issue.
+  check: "rate_mismatch" | "expired_contract" | "mtm_inconsistency" | "term_date_mismatch" | "no_contract" | string;
+  severity: "error" | "warning" | "info";
+  message: string;
+  details?: Record<string, unknown>;
+}
+
 export interface ExtractedRow {
   id: string;
   sourceFile: string;
   carrier: string;
   confidence: "high" | "medium" | "low";
+  // Per-row compliance flags from the post-merge audit (rate mismatch,
+  // expired contract, MTM inconsistency, etc.). Empty/missing on rows
+  // that pass all checks.
+  compliance_flags?: ComplianceFlag[];
   // All 60 fields stored as-is from API (snake_case)
   row_type?: string | null;
   status?: string | null;

@@ -22,7 +22,9 @@ import {
 import { MoveRight } from "lucide-react";
 
 export function mapAPIRowToStore(row: ExtractedRowAPI): ExtractedRow {
-  // Pass through all 60 fields as-is, just rename source_file → sourceFile
+  // Pass through all 60 fields as-is, just rename source_file → sourceFile.
+  // compliance_flags + validation_issues are JSONB arrays from Postgres —
+  // the spread carries them through unchanged for the table to render.
   const { source_file, ...rest } = row;
   return {
     ...rest,
