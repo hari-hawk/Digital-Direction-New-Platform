@@ -364,6 +364,49 @@ async def extract_section(
         else:
             response = await gemini.extract(prompt, model=model)
         raw_rows = _parse_json_response(response.content)
+
+        # Flash auto-escalation: if we got ≤2 rows back but the section text
+        # clearly has many items (5+ money amounts, multiple "Total" labels,
+        # or a numbered list of 5+), retry with Pro. AI Studio Flash is
+        # known to occasionally summarize multi-item sections into a single
+        # row (~40% rate observed on small AT&T single-line bills). Pro is
+        # rock-solid on enumeration but 5x the cost — only retry when the
+        # heuristic flags a likely under-extraction.
+        flash_models = ("flash",)
+        is_flash = any(m in (model or "").lower() for m in flash_models)
+        if (
+            is_flash
+            and section.section_type != "scanned"  # multimodal already uses Pro
+            and isinstance(raw_rows, list)
+            and _looks_under_extracted(raw_rows, section.text)
+            and settings.gemini_complex_model
+            and settings.gemini_complex_model != model
+        ):
+            logger.warning(
+                "Flash returned %d rows but section has multiple enumeration "
+                "signals — retrying with %s",
+                len(raw_rows), settings.gemini_complex_model,
+            )
+            try:
+                pro_response = await gemini.extract(
+                    prompt, model=settings.gemini_complex_model
+                )
+                pro_rows = _parse_json_response(pro_response.content)
+                if isinstance(pro_rows, list) and len(pro_rows) > len(raw_rows):
+                    logger.info(
+                        "Pro retry produced %d rows (vs Flash %d) — using Pro result",
+                        len(pro_rows), len(raw_rows),
+                    )
+                    raw_rows = pro_rows
+                    response = pro_response
+                else:
+                    logger.info(
+                        "Pro retry produced %d rows (Flash had %d) — keeping Flash result",
+                        len(pro_rows) if isinstance(pro_rows, list) else 0,
+                        len(raw_rows),
+                    )
+            except Exception as e:
+                logger.warning("Pro retry failed (%s) — keeping Flash result", e)
     except (json.JSONDecodeError, ValueError) as e:
         content = response.content[:500] if response else "no response"
         logger.error(f"JSON parse failed: {e}. Response: {content}")
@@ -562,6 +605,34 @@ def _backfill_single_line_phones(rows: list[ExtractedRow], carrier: str, documen
 # ============================================
 # Document-Level Extraction
 # ============================================
+
+def _looks_under_extracted(rows: list, section_text: str) -> bool:
+    """Heuristic: did Flash silently summarize a multi-item section?
+
+    AI Studio Flash occasionally returns just 1 "summary" row for a section
+    that clearly has many line items (e.g., a single-line AT&T bill with 23
+    numbered items + tax/surcharge rows). Symptom we have to detect from
+    output alone, since the LLM doesn't tell us it summarized.
+
+    Heuristic: if rows ≤ 1 AND the source text shows enumeration signals
+    (multiple money amounts, multiple "Total ..." labels, or numbered
+    list markers), it's likely under-extracted — caller should retry with
+    a stronger model.
+
+    Tuned to be conservative: false-positive (unnecessary retry) is fine
+    once-in-a-while; false-negative (missed retry) is the user-visible bug.
+    """
+    if len(rows) > 2:
+        return False
+    if not section_text:
+        return False
+    money = len(re.findall(r"\$?\d+\.\d{2}\b", section_text))
+    totals = len(re.findall(r"\bTotal[A-Za-z ]+\$?\d", section_text))
+    numbered = len(re.findall(r"(?m)^\s*\d+\.\s*[A-Za-z]", section_text))
+    # Multiple amounts + multiple totals = clearly multi-item; or a numbered
+    # list with 5+ entries.
+    return money >= 5 or totals >= 2 or numbered >= 5
+
 
 def _format_extraction_error(section, err) -> str:
     """Render a one-line, user-facing reason a section failed to extract.
