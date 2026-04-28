@@ -79,6 +79,7 @@ columns:
   - { field: contract_number_2,          label: "2nd Contract Number",                      area: "Contract",            required: only_used_as_needed }
   - { field: auto_renew,                 label: "*Auto Renew",                              area: "Contract",            required: required_for_ticket_closure }
   - { field: auto_renewal_notes,         label: "Auto Renewal Notes and Removal Requirements", area: "Contract",         required: only_used_as_needed }
+  - { field: compliance_flags,           label: "Compliance Audit Flags",                   area: "Audit",               required: only_used_as_needed }
 
 
 # ────────────────────────────────────────────────────────────────────────

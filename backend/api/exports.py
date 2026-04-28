@@ -259,6 +259,21 @@ def _build_extracted_data_sheet(ws, rows, column_specs, req_labels):
             val = getattr(row, spec["field"], None)
             if val is None:
                 continue
+            # compliance_flags is a JSONB list of {check, severity, message,
+            # details} — render as one human-readable string per row so the
+            # analyst sees why a row was flagged without expanding JSON.
+            if spec["field"] == "compliance_flags" and isinstance(val, list) and val:
+                lines = []
+                for f in val:
+                    if not isinstance(f, dict):
+                        continue
+                    check = f.get("check") or ""
+                    sev   = f.get("severity") or ""
+                    msg   = f.get("message") or ""
+                    lines.append(f"[{sev}] {check}: {msg}")
+                val = "\n".join(lines) if lines else None
+                if val is None:
+                    continue
             cell = ws.cell(row=r_idx, column=col_idx)
             cell.value = val
             field_conf = confidence_map.get(spec["field"])
@@ -266,6 +281,14 @@ def _build_extracted_data_sheet(ws, rows, column_specs, req_labels):
                 cell.fill = fills[field_conf]
             if col_idx in text_cols:
                 cell.number_format = "@"
+            if spec["field"] == "compliance_flags":
+                # Show severity-coded fill so flagged rows stand out at a glance
+                from openpyxl.styles import Alignment as _Align
+                cell.alignment = _Align(wrap_text=True, vertical="top")
+                if "[error]" in val.lower():
+                    cell.fill = fills.get("low") or cell.fill
+                elif "[warning]" in val.lower():
+                    cell.fill = fills.get("medium") or cell.fill
 
     # Reasonable column widths
     for col_idx, spec in enumerate(column_specs, start=1):
@@ -274,7 +297,12 @@ def _build_extracted_data_sheet(ws, rows, column_specs, req_labels):
         long_cols = {"notes", "auto_renewal_notes", "files_used", "additional_circuit_ids",
                      "component_or_feature_name", "billing_name", "service_address_1",
                      "z_address_1", "contract_file_name", "z_location_name"}
-        ws.column_dimensions[col_letter].width = 30 if spec["field"] in long_cols else 18
+        if spec["field"] == "compliance_flags":
+            ws.column_dimensions[col_letter].width = 50
+        elif spec["field"] in long_cols:
+            ws.column_dimensions[col_letter].width = 30
+        else:
+            ws.column_dimensions[col_letter].width = 18
 
     ws.freeze_panes = "A4"
 

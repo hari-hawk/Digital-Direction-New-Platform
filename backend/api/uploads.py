@@ -127,6 +127,73 @@ async def _save_upload(upload_id: str, data: dict) -> None:
     await us.save_upload(upload_id, data)
 
 
+def _run_compliance_check_on_dicts(rows: list[dict]) -> tuple[int, int]:
+    """Run validation + compliance audit on a dict-shaped row list.
+
+    Mutates each row in-place: writes `validation_issues`, `validation_valid`,
+    and `compliance_flags` as needed. Flips `status` to "Needs Review" only
+    when a row is currently blank-or-not-set on status (preserving any
+    analyst-set value).
+
+    Used by both _run_extraction (so single-document uploads get the audit
+    out of the gate) and _run_merge (post-merge re-check on cross-doc data).
+    Returns (vi, ci) — counts of error-level validation issues / compliance
+    flags — for logging.
+    """
+    if not rows:
+        return 0, 0
+    try:
+        from backend.pipeline.validator import validate_rows
+        from backend.pipeline.compliance import check_compliance, flags_to_jsonb
+        from backend.models.schemas import ExtractedRow
+    except ImportError as e:
+        logger.warning("compliance check skipped (import error): %s", e)
+        return 0, 0
+
+    # Build ExtractedRow models from dicts. Skip rows that fail to rebuild
+    # (usually missing required fields) — they keep their dict-only state.
+    model_rows: list = []
+    for rd in rows:
+        fields = {k: v for k, v in rd.items() if k in ExtractedRow.model_fields}
+        try:
+            model_rows.append(ExtractedRow(**fields))
+        except Exception:
+            model_rows.append(None)
+
+    valid_model_rows = [r for r in model_rows if r is not None]
+    if not valid_model_rows:
+        return 0, 0
+
+    # Validation
+    validation_results = validate_rows(valid_model_rows)
+    vi = 0
+    paired = [(rd, mr) for rd, mr in zip(rows, model_rows) if mr is not None]
+    for (rd, _mr), vr in zip(paired, validation_results):
+        if isinstance(vr, dict) and "issues" in vr:
+            issues = vr.get("issues", [])
+            rd["validation_issues"] = issues
+            rd["validation_valid"] = vr.get("valid", True)
+            if issues and any(i.get("severity") == "error" for i in issues):
+                vi += 1
+                if not rd.get("status"):
+                    rd["status"] = "Needs Review"
+
+    # Compliance — billing-vs-contract audit
+    compliance_result = check_compliance(valid_model_rows)
+    ci = 0
+    # Map valid-row index → original-row index so flags land on the right dict
+    valid_to_orig = [i for i, mr in enumerate(model_rows) if mr is not None]
+    for valid_idx, flags in compliance_result.flags_by_row.items():
+        if valid_idx < len(valid_to_orig):
+            orig_idx = valid_to_orig[valid_idx]
+            rows[orig_idx]["compliance_flags"] = flags_to_jsonb(flags)
+            if any(f.severity == "error" for f in flags):
+                ci += 1
+                if not rows[orig_idx].get("status"):
+                    rows[orig_idx]["status"] = "Needs Review"
+    return vi, ci
+
+
 async def _get_upload(upload_id: str) -> dict | None:
     return await us.get_upload(upload_id)
 
@@ -932,59 +999,17 @@ async def _run_merge(upload_id: str):
         except Exception as e:
             logger.warning(f"master-data overrides skipped: {e}")
 
-        # Post-merge validation + compliance — auto-run every time.
-        # Validator re-checks format / cross-field math on merged rows.
-        # Compliance flags rate_mismatch / expired_contract / MTM / term-math / no_contract.
+        # Post-merge validation + compliance — re-run on the merged rows
+        # so cross-doc data (e.g. contract terms now joined onto invoice
+        # rows) is audited together. Same helper that runs after extraction.
         try:
-            from backend.pipeline.validator import validate_rows
-            from backend.pipeline.compliance import check_compliance, flags_to_jsonb
-
-            model_rows = []
-            for rd in all_merged:
-                fields = {k: v for k, v in rd.items() if k in ExtractedRow.model_fields}
-                try:
-                    model_rows.append(ExtractedRow(**fields))
-                except Exception:
-                    model_rows.append(None)
-
-            # Validation
-            valid_model_rows = [r for r in model_rows if r is not None]
-            validation_results = validate_rows(valid_model_rows)
-            vi = 0
-            for rd, vr in zip([rd for rd, mr in zip(all_merged, model_rows) if mr is not None], validation_results):
-                if isinstance(vr, dict) and "issues" in vr:
-                    issues = vr.get("issues", [])
-                    rd["validation_issues"] = issues
-                    rd["validation_valid"] = vr.get("valid", True)
-                    if issues and any(i.get("severity") == "error" for i in issues):
-                        vi += 1
-                        if not rd.get("status"):
-                            rd["status"] = "Needs Review"
-
-            # Compliance
-            compliance_result = check_compliance(valid_model_rows)
-            ci = 0
-            for idx, flags in compliance_result.flags_by_row.items():
-                if idx < len(valid_model_rows):
-                    # Map back to the original all_merged index
-                    # (valid_model_rows skips rows that failed to rebuild)
-                    original_idx = 0
-                    valid_seen = 0
-                    for j, mr in enumerate(model_rows):
-                        if mr is not None:
-                            if valid_seen == idx:
-                                original_idx = j
-                                break
-                            valid_seen += 1
-                    all_merged[original_idx]["compliance_flags"] = flags_to_jsonb(flags)
-                    if any(f.severity == "error" for f in flags):
-                        ci += 1
-                        if not all_merged[original_idx].get("status"):
-                            all_merged[original_idx]["status"] = "Needs Review"
-
-            logger.info(f"Post-merge validation: {vi} rows with error-level issues, {ci} rows with error-level compliance flags")
+            vi, ci = _run_compliance_check_on_dicts(all_merged)
+            logger.info(
+                "Post-merge validation: %d rows with error-level issues, "
+                "%d rows with error-level compliance flags", vi, ci,
+            )
         except Exception as e:
-            logger.warning(f"Post-merge validation/compliance skipped: {e}")
+            logger.warning("Post-merge validation/compliance skipped: %s", e)
 
         # Persist merged results to the durable uploads row.
         await _update_upload_results(upload_id, all_merged)
@@ -1252,6 +1277,21 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
             rows_needing_carrier_validation=needs_validation_count,
             extraction_errors=extraction_errors,
         )
+        # Run validation + compliance audit on the extracted rows BEFORE
+        # the final write. This means rate_mismatch / expired_contract /
+        # MTM_inconsistency / term_date_mismatch / no_contract flags get
+        # populated on every upload — not just on uploads where the user
+        # remembered to click "Merge". Audit runs in-place on all_rows.
+        try:
+            ext_vi, ext_ci = _run_compliance_check_on_dicts(all_rows)
+            if ext_vi or ext_ci:
+                logger.info(
+                    "Post-extract audit: %d validation-error rows, %d compliance-flagged rows",
+                    ext_vi, ext_ci,
+                )
+        except Exception as e:
+            logger.warning("Post-extract validation/compliance skipped: %s", e)
+
         await _update_upload_results(upload_id, all_rows)
         logger.info(f"Upload {upload_id} complete: {len(all_rows)} total rows from {files_processed} files")
         if extraction_errors:
@@ -1263,6 +1303,28 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
 
         # Persist to the typed extracted_rows table for analytics queries.
         await _persist_to_db(upload_id, all_rows, files_processed)
+
+        # Auto-trigger cross-document merge when the project has BOTH a
+        # contract and an invoice/CSR/report. The merger correlates them
+        # by carrier_account_number / sub_account_number / phone_number /
+        # circuit and back-fills contract terms onto the matching service
+        # rows — exactly the customer's "(b) determine which contract
+        # corelates with which service" requirement. Without this hook the
+        # merge only ran when an analyst explicitly clicked "Merge", and
+        # most projects never had it run.
+        try:
+            doc_types_in_run = {(fa.get("doc_type") or "").lower() for fa in file_assignments}
+            non_contract_docs = doc_types_in_run & {"invoice", "csr", "report", "subscription"}
+            if "contract" in doc_types_in_run and non_contract_docs:
+                logger.info(
+                    "Auto-triggering cross-doc merge for upload %s "
+                    "(doc types: %s) so contract terms correlate to %s rows",
+                    upload_id, sorted(doc_types_in_run), sorted(non_contract_docs),
+                )
+                # Fire-and-forget — _run_merge updates the upload state on its own.
+                asyncio.create_task(_run_merge(upload_id))
+        except Exception as e:
+            logger.warning("auto-merge trigger skipped for %s: %s", upload_id, e)
 
     except Exception as e:
         logger.error(f"Extraction task crashed for {upload_id}: {e}")
