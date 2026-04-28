@@ -131,7 +131,7 @@ class StorageBackend(ABC):
 
 class LocalStorage(StorageBackend):
     def __init__(self, base_dir: str):
-        self.base_dir = Path(base_dir)
+        self.base_dir = Path(base_dir).resolve()  # always absolute
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     def _resolve(self, storage_path: str) -> Path:
@@ -140,6 +140,13 @@ class LocalStorage(StorageBackend):
         p = Path(storage_path)
         if p.is_absolute():
             return p
+        # Strip base_dir prefix if path was stored with it
+        # (happens when base_dir was a relative path like "storage")
+        for prefix in (self.base_dir, Path(self.base_dir.name)):
+            try:
+                return self.base_dir / p.relative_to(prefix)
+            except ValueError:
+                pass
         return self.base_dir / p
 
     def save(self, content: bytes, remote_path: str) -> str:
