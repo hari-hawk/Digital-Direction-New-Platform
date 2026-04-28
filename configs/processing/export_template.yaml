@@ -1,0 +1,143 @@
+# Customer's master inventory template — column order, requirement levels,
+# column explanations, and the QA checklist.
+# Sourced from "Mandatory files, Column Explanation & Checklist.xlsx" (2026-04-28).
+#
+# The Excel exporter (backend/api/exports.py) reads this file to:
+#   1. Build the "Extracted Data" sheet in the customer's exact column order
+#      with a "Required level" annotation row above the headers.
+#   2. Add a "Checklist" sheet so the analyst's QA items ship with every export.
+#   3. Add a "Column Explanations" sheet with the customer's own descriptions.
+#   4. Add a "Mandatory Fields" reference sheet showing the requirement matrix
+#      grouped by area (DD2 Information / Location / Carrier / Service / etc.).
+
+# ────────────────────────────────────────────────────────────────────────
+# 1. Column order + requirement metadata
+#    field      = the snake_case field name on ExtractedRow (matches our schema)
+#    label      = the display name as printed in the customer's template
+#    area       = section grouping (matches customer's row-1 area headers)
+#    required   = "required" / "required_if_applicable" / "required_for_ticket_closure"
+#                 / "only_used_as_needed" / "list_if_available"
+# ────────────────────────────────────────────────────────────────────────
+columns:
+  - { field: status,                     label: "Status",                                    area: "DD2 Information",     required: required }
+  - { field: notes,                      label: "Inventory creation questions, concerns, or notes.", area: "DD2 Information", required: only_used_as_needed }
+  - { field: contract_info_received,     label: "*Contract Info received",                  area: "DD2 Information",     required: required }
+  - { field: invoice_file_name,          label: "Invoice File Name",                        area: "File Information",    required: required }
+  - { field: files_used,                 label: "Files Used For Inventory",                 area: "File Information",    required: required }
+  - { field: billing_name,               label: "Billing Name",                             area: "File Information",    required: required }
+  - { field: service_address_1,          label: "Service Address 1",                        area: "Location",            required: required }
+  - { field: service_address_2,          label: "Service Address 2",                        area: "Location",            required: required_if_applicable }
+  - { field: city,                       label: "City",                                     area: "Location",            required: required }
+  - { field: state,                      label: "State",                                    area: "Location",            required: required }
+  - { field: zip,                        label: "Zip",                                      area: "Location",            required: required }
+  - { field: country,                    label: "Country",                                  area: "Location",            required: required_if_applicable }
+  - { field: carrier_name,               label: "Carrier",                                  area: "Carrier Information", required: required }
+  - { field: master_account,             label: "Master Account",                           area: "Carrier Information", required: required_if_applicable }
+  - { field: carrier_account_number,     label: "Carrier Account Number",                   area: "Carrier Information", required: required }
+  - { field: sub_account_number_1,       label: "Sub-Account Number",                       area: "Carrier Information", required: required_if_applicable }
+  - { field: sub_account_number_2,       label: "Sub-Account Number 2",                     area: "Carrier Information", required: required_if_applicable }
+  - { field: btn,                        label: "BTN",                                      area: "Service",             required: required_if_applicable }
+  - { field: phone_number,               label: "Phone Number",                             area: "Service",             required: required_if_applicable }
+  - { field: carrier_circuit_number,     label: "Carrier Circuit Number",                   area: "Service",             required: required_if_applicable }
+  - { field: additional_circuit_ids,     label: "Additional Circuit IDs",                   area: "Service",             required: only_used_as_needed }
+  - { field: service_type,               label: "Service Type",                             area: "Service",             required: required }
+  - { field: service_type_2,             label: "Service Type 2",                           area: "Service",             required: only_used_as_needed }
+  - { field: usoc,                       label: "USOC",                                     area: "Component",           required: required_if_applicable }
+  - { field: service_or_component,       label: "Service or Component",                     area: "Component",           required: required }
+  - { field: component_or_feature_name,  label: "Component or Feature Name",                area: "Component",           required: required }
+  - { field: monthly_recurring_cost,     label: "Monthly Recurring Cost",                   area: "Component",           required: required }
+  - { field: quantity,                   label: "Quantity",                                 area: "Component",           required: required_if_applicable }
+  - { field: cost_per_unit,              label: "Cost Per Unit",                            area: "Component",           required: required_if_applicable }
+  - { field: currency,                   label: "Currency",                                 area: "Component",           required: required }
+  - { field: conversion_rate,            label: "Conversion Rate",                          area: "Component",           required: required_if_applicable }
+  - { field: mrc_per_currency,           label: "Monthly Recurring Cost per Currency",      area: "Component",           required: required_if_applicable }
+  - { field: charge_type,                label: "Charge Type",                              area: "Component",           required: required }
+  - { field: num_calls,                  label: "# Calls",                                  area: "Additional Component", required: list_if_available }
+  - { field: ld_minutes,                 label: "LD Minutes",                               area: "Additional Component", required: list_if_available }
+  - { field: ld_cost,                    label: "LD Cost",                                  area: "Additional Component", required: list_if_available }
+  - { field: rate,                       label: "Rate",                                     area: "Additional Component", required: list_if_available }
+  - { field: ld_flat_rate,               label: "LD Flat Rate",                             area: "Additional Component", required: list_if_available }
+  - { field: point_to_number,            label: "Point to Number",                          area: "Additional Component", required: list_if_available }
+  - { field: port_speed,                 label: "Port Speed",                               area: "Circuit Speed",       required: required_if_applicable }
+  - { field: access_speed,               label: "Access Speed",                             area: "Circuit Speed",       required: required_if_applicable }
+  - { field: upload_speed,               label: "Upload Speed",                             area: "Circuit Speed",       required: required_if_applicable }
+  - { field: z_location_name,            label: "Z Location Name If One Given By Carrier",  area: "Z Location",          required: required_for_ticket_closure }
+  - { field: z_address_1,                label: "Z Address 1",                              area: "Z Location",          required: required_for_ticket_closure }
+  - { field: z_address_2,                label: "Z Address 2",                              area: "Z Location",          required: required_for_ticket_closure }
+  - { field: z_city,                     label: "Z City",                                   area: "Z Location",          required: required_for_ticket_closure }
+  - { field: z_state,                    label: "Z State",                                  area: "Z Location",          required: required_for_ticket_closure }
+  - { field: z_zip,                      label: "Z Zip Code",                               area: "Z Location",          required: required_for_ticket_closure }
+  - { field: z_country,                  label: "Z Country",                                area: "Z Location",          required: required_for_ticket_closure }
+  - { field: contract_term_months,       label: "*Contract - Term Months",                  area: "Contract",            required: required_for_ticket_closure }
+  - { field: contract_begin_date,        label: "*Contract - Begin Date",                   area: "Contract",            required: required_for_ticket_closure }
+  - { field: contract_expiration_date,   label: "*Contract - Expiration Date",              area: "Contract",            required: required_for_ticket_closure }
+  - { field: billing_per_contract,       label: "Billing Per Contract",                     area: "Contract",            required: required_for_ticket_closure }
+  - { field: currently_month_to_month,   label: "*Currently Month-to-Month",                area: "Contract",            required: required_for_ticket_closure }
+  - { field: mtm_or_less_than_year,      label: "Month to Month or Less Than a Year Remaining", area: "Contract",        required: required_for_ticket_closure }
+  - { field: contract_file_name,         label: "Contract File Name",                       area: "Contract",            required: required_for_ticket_closure }
+  - { field: contract_number,            label: "Contract Number",                          area: "Contract",            required: only_used_as_needed }
+  - { field: contract_number_2,          label: "2nd Contract Number",                      area: "Contract",            required: only_used_as_needed }
+  - { field: auto_renew,                 label: "*Auto Renew",                              area: "Contract",            required: required_for_ticket_closure }
+  - { field: auto_renewal_notes,         label: "Auto Renewal Notes and Removal Requirements", area: "Contract",         required: only_used_as_needed }
+
+
+# ────────────────────────────────────────────────────────────────────────
+# 2. Column-by-column explanations (verbatim from customer's sheet 2)
+# ────────────────────────────────────────────────────────────────────────
+explanations:
+  status: |
+    Complete it all information is obtained the record is complete.
+    Pending if all information is not obtained and/or building the inventory is ongoing.
+  notes: "Used to show what the inventory is still missing or other helpful information."
+  contract_info_received: "Contract information and the actual documents is hard to obtain. This column refers to the current status of the work to obtain this information."
+  invoice_file_name: "The exact name of the invoice file the inventory is based on."
+  files_used: "The exact name of any other files used to build the inventory besides the invoice."
+  service_type: "See Dropdown tab for the Service Types we use."
+  service_type_2: "If we feel additional Service Type information is helpful, we show here."
+
+
+# ────────────────────────────────────────────────────────────────────────
+# 3. QA checklist — ships as its own sheet on every export
+# ────────────────────────────────────────────────────────────────────────
+checklist:
+  - "Check whether S record missing and only C record is entered for a service"
+  - "Loc Z addresses"
+  - "Sub total mismatch - S record total to match with the C records"
+  - "Service Address Not Available, check with source file once"
+  - "Reconcile the total with Monthly report / invoice"
+  - "Service address normalization along with zip to be done"
+  - "One TN with 2 service types to be checked through pivot"
+  - "1SXWE Usoc service type to be centrex (applicable for Verizon vendor)"
+  - "DID in Service type 2 & Primary service in service type 1"
+  - "Bandwidth should be captured on both S & C record. The Access and Upload speed would be Symmetrical in case of Ethernet, MPLS, DIA and Optical Circuit, DS1, DS3"
+  - "Account level charges to be captured in inventory"
+  - "Account / Sub Acct / BTN / Carrier acts to be validated with source file"
+  - "Billing Names should not be blank"
+  - "Zero line POTS charges"
+  - "Additional items details to be updated from CSR's"
+  - "Formatting of $ in Monthly cost & Cost each"
+  - "Formatting of Excel file to be uniform across"
+  - "Phone Number Format should be special"
+  - "Inventory notes to be validated for anything missing/TBD"
+  - "If TBD, add details in service type 2 for further research for DD1"
+  - "3 Addresses - 3rd address to be mentioned in service type 2 (incase found any can be flagged)"
+  - "Fill all blanks with \"No Fill\" (Applicable for NYC for now, incase of Vendor-Verizon)"
+  - "Ethernet service should have Access & Upload speed"
+  - "Dark Fiber can be completed without Bandwidth"
+  - "Recheck for blanks. If anything missing it cannot be tagged as inventory complete"
+  - "Check for one circuit billing in 2 accounts and update service type 2"
+  - "For RJ21X description we can use Inside Wiring for Service Type (If Applicable)"
+  - "For Entrance Bridge, Additional item use \"Conferencing\" as service type"
+  - "For all Managed security and Managed services use \"Managed Services\" as the service type"
+  - "The AT&T HSI services are always Month to Month"
+
+
+# ────────────────────────────────────────────────────────────────────────
+# 4. Friendly labels for the requirement levels
+# ────────────────────────────────────────────────────────────────────────
+requirement_labels:
+  required:                       "Required"
+  required_if_applicable:         "Required if Applicable"
+  required_for_ticket_closure:    "Required for Ticket Closure"
+  only_used_as_needed:            "Only Used as Needed"
+  list_if_available:              "List if Available — Not Required to Consider Quick Hits Complete"

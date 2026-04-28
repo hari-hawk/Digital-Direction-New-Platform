@@ -1,8 +1,21 @@
-"""Export/Import API — Excel download and corrected Excel upload."""
+"""Export/Import API — Excel download and corrected Excel upload.
+
+The Excel export is driven by `configs/processing/export_template.yaml` so
+it always matches the customer's master inventory template:
+  Sheet 1 "Extracted Data" — the rows in customer column order, with a
+                              "Required level" annotation row above headers
+  Sheet 2 "Checklist"      — 30 QA items (Agent / QA Yes-No columns blank
+                              for the analyst to fill in)
+  Sheet 3 "Column Explanations" — verbatim column definitions
+  Sheet 4 "Mandatory Fields"    — requirement matrix grouped by area
+"""
 
 import io
 import logging
+from functools import lru_cache
+from pathlib import Path
 
+import yaml
 from fastapi import APIRouter, Depends, UploadFile, File
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select
@@ -10,11 +23,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.database import get_db
 from backend.models.orm import ExtractedRow, ExtractionRun, Correction
+from backend.settings import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/exports", tags=["exports"])
 
-# Field order for Excel export — matches the 60-field DD2 template
+
+@lru_cache(maxsize=1)
+def _export_template() -> dict:
+    """Load + cache the customer's export template config."""
+    path = Path(settings.configs_dir) / "processing" / "export_template.yaml"
+    if not path.exists():
+        logger.warning("export_template.yaml missing — falling back to legacy column list")
+        return {}
+    return yaml.safe_load(path.read_text()) or {}
+
+
+# Legacy column list — used as a fallback if the YAML is unavailable, and
+# kept aliased to _EXCEL_FIELDS so /corrections/import (which expects this
+# exact order) continues to work even after we switch to the YAML for export.
 _EXCEL_FIELDS = [
     ("status", "Status"),
     ("notes", "Notes"),
@@ -81,23 +108,29 @@ _EXCEL_FIELDS = [
 
 @router.get("/{upload_id}/excel")
 async def export_excel(upload_id: str, db: AsyncSession = Depends(get_db)):
-    """Download extracted rows as Excel with confidence color coding."""
+    """Download extracted rows as a multi-sheet Excel matching the customer's
+    master inventory template (configs/processing/export_template.yaml).
+
+    Sheets:
+      1. Extracted Data        — rows in customer column order + requirement
+                                  level annotation row + confidence color coding
+      2. Checklist             — 30 QA items, Agent/QA Yes-No columns
+      3. Column Explanations   — verbatim column definitions
+      4. Mandatory Fields      — requirement matrix grouped by area
+    """
     try:
         import openpyxl
-        from openpyxl.styles import PatternFill
+        from openpyxl.styles import PatternFill, Font, Alignment
 
         # Find extraction run(s) for this upload
         run_result = await db.execute(
             select(ExtractionRun).where(ExtractionRun.config_version == upload_id)
         )
         runs = run_result.scalars().all()
-
         if not runs:
             return JSONResponse(status_code=404, content={"error": "No extraction data found"})
 
         run_ids = [r.id for r in runs]
-
-        # Query rows
         row_result = await db.execute(
             select(ExtractedRow)
             .where(ExtractedRow.extraction_run_id.in_(run_ids))
@@ -105,57 +138,235 @@ async def export_excel(upload_id: str, db: AsyncSession = Depends(get_db)):
         )
         rows = row_result.scalars().all()
 
+        # Load the customer template (column order + checklist + explanations)
+        template = _export_template()
+        column_specs = template.get("columns") or [
+            {"field": f, "label": l, "area": "", "required": ""}
+            for f, l in _EXCEL_FIELDS
+        ]
+        explanations = template.get("explanations") or {}
+        checklist_items = template.get("checklist") or []
+        req_labels = template.get("requirement_labels") or {}
+
         wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Extracted Data"
-
-        # Confidence color fills
-        fills = {
-            "high": PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"),
-            "medium": PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid"),
-            "low": PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"),
-        }
-
-        # Headers
-        headers = [display for _, display in _EXCEL_FIELDS]
-        ws.append(headers)
-
-        # Data rows
-        for row in rows:
-            confidence_map = row.field_confidence or {}
-            values = []
-            for field_name, _ in _EXCEL_FIELDS:
-                val = getattr(row, field_name, None)
-                if val is not None:
-                    val = str(val)
-                values.append(val)
-            ws.append(values)
-
-            # Apply confidence color coding per cell
-            row_idx = ws.max_row
-            for col_idx, (field_name, _) in enumerate(_EXCEL_FIELDS, start=1):
-                field_conf = confidence_map.get(field_name)
-                if field_conf and field_conf in fills:
-                    ws.cell(row=row_idx, column=col_idx).fill = fills[field_conf]
-
-        # Format phone number columns as text
-        for col_letter in ["R", "S"]:  # BTN, Phone Number
-            for cell in ws[col_letter]:
-                cell.number_format = "@"
+        _build_extracted_data_sheet(wb.active, rows, column_specs, req_labels)
+        _build_checklist_sheet(wb.create_sheet("Checklist"), checklist_items)
+        _build_column_explanations_sheet(
+            wb.create_sheet("Column Explanations"), column_specs, explanations
+        )
+        _build_mandatory_fields_sheet(
+            wb.create_sheet("Mandatory Fields"), column_specs, req_labels
+        )
 
         buffer = io.BytesIO()
         wb.save(buffer)
         buffer.seek(0)
-
         return StreamingResponse(
             buffer,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f"attachment; filename=extraction_{upload_id}.xlsx"},
+            headers={"Content-Disposition": f"attachment; filename=inventory_{upload_id}.xlsx"},
         )
 
     except Exception as e:
-        logger.error(f"Excel export failed: {e}")
+        logger.exception("Excel export failed for %s", upload_id)
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Sheet builders
+# ────────────────────────────────────────────────────────────────────────
+
+
+def _build_extracted_data_sheet(ws, rows, column_specs, req_labels):
+    """Sheet 1 — the actual extracted data, in customer column order.
+
+    Layout:
+      row 1: Area headers (Location, Carrier Information, Service, ...)
+      row 2: Required level (Required, Required if Applicable, ...)
+      row 3: Column display names
+      row 4+: Data rows, with confidence color fill per cell
+    """
+    from openpyxl.styles import PatternFill, Font, Alignment
+
+    ws.title = "Extracted Data"
+
+    fills = {
+        "high":   PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"),
+        "medium": PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid"),
+        "low":    PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"),
+    }
+    area_fill   = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
+    req_fill    = PatternFill(start_color="9DC3E6", end_color="9DC3E6", fill_type="solid")
+    header_fill = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
+    white_bold  = Font(color="FFFFFF", bold=True)
+    bold        = Font(bold=True)
+
+    # Row 1 — area headers spanning each contiguous run of same area
+    last_area = None
+    span_start = 1
+    for col_idx, spec in enumerate(column_specs, start=1):
+        area = spec.get("area") or ""
+        if area != last_area:
+            if last_area is not None and col_idx > span_start:
+                ws.merge_cells(start_row=1, start_column=span_start, end_row=1, end_column=col_idx - 1)
+                cell = ws.cell(row=1, column=span_start)
+                cell.value = last_area
+                cell.fill = area_fill
+                cell.font = white_bold
+                cell.alignment = Alignment(horizontal="center")
+            last_area = area
+            span_start = col_idx
+    # close the last area span
+    end_col = len(column_specs)
+    if end_col >= span_start:
+        if end_col > span_start:
+            ws.merge_cells(start_row=1, start_column=span_start, end_row=1, end_column=end_col)
+        cell = ws.cell(row=1, column=span_start)
+        cell.value = last_area
+        cell.fill = area_fill
+        cell.font = white_bold
+        cell.alignment = Alignment(horizontal="center")
+
+    # Row 2 — requirement level
+    for col_idx, spec in enumerate(column_specs, start=1):
+        cell = ws.cell(row=2, column=col_idx)
+        cell.value = req_labels.get(spec.get("required", ""), spec.get("required", ""))
+        cell.fill = req_fill
+        cell.font = bold
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+
+    # Row 3 — column labels
+    for col_idx, spec in enumerate(column_specs, start=1):
+        cell = ws.cell(row=3, column=col_idx)
+        cell.value = spec["label"]
+        cell.fill = header_fill
+        cell.font = bold
+
+    ws.row_dimensions[2].height = 32
+
+    # Row 4+ — data rows, colored per-cell by confidence
+    text_cols = []
+    for col_idx, spec in enumerate(column_specs, start=1):
+        if spec["field"] in ("btn", "phone_number", "carrier_account_number",
+                             "sub_account_number_1", "sub_account_number_2",
+                             "zip", "z_zip", "carrier_circuit_number"):
+            text_cols.append(col_idx)
+
+    data_start_row = 4
+    for r_idx, row in enumerate(rows, start=data_start_row):
+        confidence_map = row.field_confidence or {}
+        for col_idx, spec in enumerate(column_specs, start=1):
+            val = getattr(row, spec["field"], None)
+            if val is None:
+                continue
+            cell = ws.cell(row=r_idx, column=col_idx)
+            cell.value = val
+            field_conf = confidence_map.get(spec["field"])
+            if field_conf in fills:
+                cell.fill = fills[field_conf]
+            if col_idx in text_cols:
+                cell.number_format = "@"
+
+    # Reasonable column widths
+    for col_idx, spec in enumerate(column_specs, start=1):
+        col_letter = ws.cell(row=3, column=col_idx).column_letter
+        # Wider for known long columns
+        long_cols = {"notes", "auto_renewal_notes", "files_used", "additional_circuit_ids",
+                     "component_or_feature_name", "billing_name", "service_address_1",
+                     "z_address_1", "contract_file_name", "z_location_name"}
+        ws.column_dimensions[col_letter].width = 30 if spec["field"] in long_cols else 18
+
+    ws.freeze_panes = "A4"
+
+
+def _build_checklist_sheet(ws, checklist_items):
+    """Sheet 2 — 30 QA items + Agent / QA Yes-No columns blank for analyst to fill."""
+    from openpyxl.styles import PatternFill, Font, Alignment
+
+    ws.title = "Checklist"
+    header_fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
+    white_bold = Font(color="FFFFFF", bold=True)
+
+    headers = ["Checklist", "Agent — Yes/No", "QA — Yes/No"]
+    for col_idx, h in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.value = h
+        cell.fill = header_fill
+        cell.font = white_bold
+        cell.alignment = Alignment(horizontal="center")
+
+    for r_idx, item in enumerate(checklist_items, start=2):
+        ws.cell(row=r_idx, column=1).value = item
+        ws.cell(row=r_idx, column=1).alignment = Alignment(wrap_text=True)
+        # Agent + QA columns left blank intentionally; analyst fills in.
+
+    ws.column_dimensions["A"].width = 90
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 18
+    ws.row_dimensions[1].height = 22
+
+
+def _build_column_explanations_sheet(ws, column_specs, explanations):
+    """Sheet 3 — column name + explanation, exactly as the customer ships it."""
+    from openpyxl.styles import PatternFill, Font, Alignment
+
+    ws.title = "Column Explanations"
+    header_fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
+    white_bold = Font(color="FFFFFF", bold=True)
+
+    headers = ["Column Name", "Explanation"]
+    for col_idx, h in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.value = h
+        cell.fill = header_fill
+        cell.font = white_bold
+        cell.alignment = Alignment(horizontal="center")
+
+    for r_idx, spec in enumerate(column_specs, start=2):
+        ws.cell(row=r_idx, column=1).value = spec["label"]
+        explanation = explanations.get(spec["field"]) or ""
+        ws.cell(row=r_idx, column=2).value = explanation
+        ws.cell(row=r_idx, column=2).alignment = Alignment(wrap_text=True)
+
+    ws.column_dimensions["A"].width = 38
+    ws.column_dimensions["B"].width = 80
+
+
+def _build_mandatory_fields_sheet(ws, column_specs, req_labels):
+    """Sheet 4 — requirement matrix grouped by area, mirroring the customer's
+    "Mandatory Field details" tab structure."""
+    from openpyxl.styles import PatternFill, Font, Alignment
+
+    ws.title = "Mandatory Fields"
+    area_fill   = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
+    header_fill = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
+    white_bold  = Font(color="FFFFFF", bold=True)
+    bold        = Font(bold=True)
+
+    headers = ["Area", "Column", "Requirement Level"]
+    for col_idx, h in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.value = h
+        cell.fill = area_fill
+        cell.font = white_bold
+        cell.alignment = Alignment(horizontal="center")
+
+    last_area = None
+    for r_idx, spec in enumerate(column_specs, start=2):
+        area = spec.get("area") or ""
+        # Only repeat area on first row of each area group
+        if area != last_area:
+            ws.cell(row=r_idx, column=1).value = area
+            ws.cell(row=r_idx, column=1).font = bold
+            last_area = area
+        ws.cell(row=r_idx, column=2).value = spec["label"]
+        ws.cell(row=r_idx, column=3).value = req_labels.get(
+            spec.get("required", ""), spec.get("required", "")
+        )
+
+    ws.column_dimensions["A"].width = 26
+    ws.column_dimensions["B"].width = 42
+    ws.column_dimensions["C"].width = 56
 
 
 @router.post("/corrections/import")
