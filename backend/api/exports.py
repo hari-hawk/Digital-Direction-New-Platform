@@ -262,7 +262,10 @@ def _build_extracted_data_sheet(ws, rows, column_specs, req_labels):
             # compliance_flags is a JSONB list of {check, severity, message,
             # details} — render as one human-readable string per row so the
             # analyst sees why a row was flagged without expanding JSON.
-            if spec["field"] == "compliance_flags" and isinstance(val, list) and val:
+            if spec["field"] == "compliance_flags":
+                # Empty list (the JSONB column default) → skip the cell.
+                if not isinstance(val, list) or not val:
+                    continue
                 lines = []
                 for f in val:
                     if not isinstance(f, dict):
@@ -271,9 +274,19 @@ def _build_extracted_data_sheet(ws, rows, column_specs, req_labels):
                     sev   = f.get("severity") or ""
                     msg   = f.get("message") or ""
                     lines.append(f"[{sev}] {check}: {msg}")
-                val = "\n".join(lines) if lines else None
-                if val is None:
+                if not lines:
                     continue
+                val = "\n".join(lines)
+
+            # Generic safety net: any other list/dict slipping through (from
+            # JSONB columns we add later) gets stringified rather than
+            # crashing openpyxl. Pure scalars pass through unchanged.
+            elif isinstance(val, (list, dict)):
+                if not val:
+                    continue
+                import json as _json
+                val = _json.dumps(val, default=str)
+
             cell = ws.cell(row=r_idx, column=col_idx)
             cell.value = val
             field_conf = confidence_map.get(spec["field"])

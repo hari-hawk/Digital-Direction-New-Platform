@@ -1,23 +1,45 @@
-# Digital Direction — deploy package (2026-04-28)
+# Digital Direction — deploy package (2026-04-28, refreshed)
 
 **For:** Dhanapal (GCP deploy)
 **Repo:** `https://github.com/hari-hawk/Digital-Direction-New-Platform`
 **Branch:** `main`
-**Target HEAD:** `4f3dc98`
+**Target HEAD:** `9da99b8` *(or whatever `git rev-parse origin/main` shows when you pull — the doc is updated as commits land)*
 **Previous prod state:** `afcc5a0` ("added missing libraries")
 **Working tree:** clean
 
 ---
 
+## Refresh — what's new since the original 2026-04-28 deploy doc was written (HEAD `4f3dc98`)
+
+Eight additional commits landed in the same day after the original doc was committed. **All are additive** — same deploy steps below, no extra DB migrations or env vars.
+
+| Commit | What it does |
+|---|---|
+| `0296136` | **Auto-escalate Flash → Pro** when a section under-extracts. Catches AI Studio Flash flakiness on small AT&T-style bills. Verified: 5/5 runs now produce 22-24 rows even with `LLM_BACKEND=aistudio`. |
+| `ac12303` | **`scripts/recover_orphan_uploads.py`** — recovers the 79 lost files on prod (orphan disk folders → real Postgres uploads + real Previous Uploads cards). |
+| `6569051` | Compliance flags surfaced in the results table (UI column + compact-view badge + filter). |
+| `a74fa61` | **Universal subtotal extraction + account-level propagation + zip→country + `contract_info_received` auto-fill.** Spectrum 9 rows → 41 rows (4.5×); every row now carries billing_name/address/contract terms when applicable. |
+| `08a1aad` | **Dropdown vocabulary alignment** per the customer's "Dropdown Details.xlsx" — Charge Type, Status, Service or Component, MTM/Auto-Renew now emit canonical values. |
+| `21a6a3e` | **Multi-sheet Excel export** matching the customer's master inventory template — Extracted Data + Checklist + Column Explanations + Mandatory Fields. |
+| `3251e91` | **Compliance audit runs on every extraction** (not just merge) + **cross-doc merge auto-triggers** when project has contract+invoice + compliance_flags column added to Excel export. |
+| `9da99b8` | Pre-deploy fixes: empty-`compliance_flags` JSONB no longer crashes the Excel export; deploy doc refreshed to current HEAD. |
+| `a606c9e` | (Docs only) Park the autoresearch loop as a post-PoC TODO. |
+
+---
+
 ## TL;DR
 
-Six commits since prod's last deploy, addressing five distinct production issues. The user-facing symptoms were:
+Eight to fifteen commits since prod's last deploy (depending on whether you count the original doc baseline `4f3dc98` or the working `afcc5a0`), addressing six distinct production issues. The user-facing symptoms were:
 
 1. Project names + file lists silently disappearing after a day or after Cloud Run restarts.
 2. Large PDFs producing **0 extracted rows** with no error.
 3. New carriers (anything outside the 4 fully-tuned ones) showing "Validate carrier" friction.
 4. CSR/contract files extracting under the wrong prompt because `doc_type` defaulted to "invoice".
 5. (Latent) files on Cloud Run's ephemeral disk being lost on every redeploy.
+6. Single-line invoices producing 1 row instead of N (AI Studio Flash flake) — fixed in `0296136` with auto-escalate.
+7. Account-level columns (billing_name, address, contract terms) blank on most rows even when only ONE service address — fixed in `a74fa61` with field propagation.
+8. Compliance audit results invisible because they only ran on manual Merge — fixed in `3251e91`.
+9. Excel export missing the customer's checklist + column explanations + mandatory-field reference — fixed in `21a6a3e`.
 
 After this deploy:
 
