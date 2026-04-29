@@ -819,7 +819,7 @@ export function UploadPage({ onViewResults }: UploadPageProps) {
                       {!extracting && !isInterruptedOrFailed && f.status === "classified" ? (
                         <Select
                           value={f.docType || "invoice"}
-                          onValueChange={(v: string) => {
+                          onValueChange={(v: string | null) => {
                             if (v && upload) {
                               store.setFileDocType(upload.id, f.name, v);
                               toast.success(`"${f.name}" → ${v}`);

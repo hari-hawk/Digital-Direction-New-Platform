@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -352,3 +353,27 @@ class Correction(Base):
     # Relationships
     extracted_row: Mapped["ExtractedRow"] = relationship(back_populates="corrections")
     extraction_run: Mapped["ExtractionRun"] = relationship(back_populates="corrections")
+
+
+class InventoryVersion(Base):
+    """Snapshot of an inventory at a specific moment.
+
+    v0 is created when extraction completes; v1, v2, … each time a corrected
+    Excel is re-imported. The frontend's version dropdown reads from here so
+    analysts can flip back to a prior state without losing the live data.
+    Inline edits made between imports modify the live `uploads.results` —
+    they don't bump the version. See db/migrations/2026-04-29_inventory_versions.sql.
+    """
+    __tablename__ = "inventory_versions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    upload_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("uploads.id", ondelete="CASCADE"), nullable=False)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)  # 'extraction' | 'import'
+    rows_snapshot: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    file_blob: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    rows_count: Mapped[int] = mapped_column(Integer, default=0)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_by: Mapped[str | None] = mapped_column(String(255))

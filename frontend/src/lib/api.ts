@@ -154,8 +154,12 @@ export async function apiMerge(uploadId: string): Promise<{ upload_id: string; s
   return apiFetch(`/api/uploads/${uploadId}/merge`, { method: "POST" });
 }
 
-// Get results with optional view (raw = pre-merge)
-export async function apiGetResultsWithView(uploadId: string, view?: "raw" | "merged"): Promise<{
+// Get results with optional view (raw = pre-merge) or version (frozen snapshot)
+export async function apiGetResultsWithView(
+  uploadId: string,
+  view?: "raw" | "merged",
+  version?: number,
+): Promise<{
   upload_id: string;
   project_name: string;
   status: string;
@@ -163,9 +167,30 @@ export async function apiGetResultsWithView(uploadId: string, view?: "raw" | "me
   rows: ExtractedRowAPI[];
   view: string;
   has_merged: boolean;
+  version?: { number: number; source: string; rows_count: number; note?: string; created_at?: string; has_file?: boolean };
 }> {
-  const query = view ? `?view=${view}` : "";
+  const params = new URLSearchParams();
+  if (view) params.set("view", view);
+  if (version !== undefined) params.set("version", String(version));
+  const query = params.toString() ? `?${params.toString()}` : "";
   return apiFetch(`/api/uploads/${uploadId}/results${query}`);
+}
+
+// List all saved versions (snapshots) of an upload's inventory
+export interface InventoryVersion {
+  id: string;
+  upload_id: string;
+  version_number: number;
+  source: "extraction" | "import" | string;
+  rows_count: number;
+  file_hash: string | null;
+  has_file: boolean;
+  note: string | null;
+  created_at: string | null;
+  created_by: string | null;
+}
+export async function apiListVersions(uploadId: string): Promise<{ upload_id: string; versions: InventoryVersion[] }> {
+  return apiFetch(`/api/uploads/${uploadId}/versions`);
 }
 
 // List configured carriers

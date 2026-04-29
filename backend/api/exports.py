@@ -12,6 +12,7 @@ it always matches the customer's master inventory template:
 
 import io
 import logging
+import uuid
 from functools import lru_cache
 from pathlib import Path
 
@@ -689,6 +690,52 @@ async def import_corrections(
                 db_row.review_status = "corrected"
 
         await db.commit()
+
+        # Snapshot the new state as the next version (Apr 29 customer ask).
+        # Done in an independent session AFTER the corrections commit — sharing
+        # the route's session triggers greenlet errors when we touch
+        # server-defaulted columns (e.g. created_at) on the just-inserted row
+        # without an explicit refresh. The two-transaction pattern is fine:
+        # corrections are already durable by the time we snapshot.
+        # Re-fetch rows freshly so all relationships and server-defaults are
+        # safe to read under the helper's own session.
+        version_info = None
+        if corrections_created > 0:
+            try:
+                from backend.services.inventory_versions import write_snapshot
+                from backend.models.database import async_session as _async_session
+                async with _async_session() as fresh:
+                    fresh_rows = (await fresh.execute(
+                        select(ExtractedRow)
+                        .where(ExtractedRow.extraction_run_id.in_(run_ids))
+                        .order_by(ExtractedRow.created_at)
+                    )).scalars().all()
+                    rows_payload = []
+                    for r in fresh_rows:
+                        rd: dict[str, object] = {}
+                        for c in r.__table__.columns:
+                            v = getattr(r, c.name)
+                            if v is None:
+                                rd[c.name] = None
+                            elif hasattr(v, "isoformat"):
+                                rd[c.name] = v.isoformat()
+                            elif isinstance(v, uuid.UUID):
+                                rd[c.name] = str(v)
+                            elif hasattr(v, "as_tuple"):  # Decimal
+                                rd[c.name] = str(v)
+                            else:
+                                rd[c.name] = v
+                        rows_payload.append(rd)
+                version_info = await write_snapshot(
+                    upload_id,
+                    rows_payload,
+                    source="import",
+                    note=f"Re-imported corrected Excel — {corrections_created} correction(s) across {rows_compared} row(s)",
+                    file_blob=content,
+                )
+            except Exception as e:
+                logger.warning("Version snapshot skipped for %s: %s", upload_id, e)
+
         return {
             "upload_id": upload_id,
             "rows_compared": rows_compared,
@@ -696,6 +743,7 @@ async def import_corrections(
             "columns_recognized": len(col_to_field),
             "header_row": header_row,
             "data_start_row": data_start_row,
+            "new_version": version_info,
         }
 
     except Exception as e:

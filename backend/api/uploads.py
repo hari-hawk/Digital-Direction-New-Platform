@@ -596,11 +596,45 @@ async def get_status(upload_id: str):
 
 
 @router.get("/{upload_id}/results")
-async def get_results(upload_id: str, view: str | None = None):
-    """Get extracted rows for this upload. ?view=raw returns pre-merge results."""
+async def get_results(upload_id: str, view: str | None = None, version: int | None = None):
+    """Get extracted rows for this upload.
+
+    Query params:
+      view=raw    — return pre-merge results (the per-file rows before
+                    cross-document merge ran).
+      version=N   — return the FROZEN snapshot of version N (Apr 29 ask).
+                    Default (no `version`): the live data, which equals the
+                    latest snapshot at the moment of import, then drifts
+                    with subsequent inline edits.
+    """
     upload = await _get_upload(upload_id)
     if not upload:
         return JSONResponse(status_code=404, content={"error": "Upload not found"})
+
+    # Version filter — frozen snapshot of a prior point in time.
+    if version is not None:
+        from backend.services.inventory_versions import get_snapshot
+        snap = await get_snapshot(upload_id, int(version))
+        if snap is None:
+            return JSONResponse(status_code=404, content={"error": f"Version {version} not found for this upload"})
+        rows = snap.get("rows_snapshot") or []
+        return {
+            "upload_id": upload_id,
+            "project_name": upload.get("project_name", ""),
+            "status": upload["status"],
+            "total_rows": len(rows),
+            "rows": rows,
+            "view": f"version-{version}",
+            "has_merged": upload.get("has_raw_results", False),
+            "version": {
+                "number": snap["version_number"],
+                "source": snap["source"],
+                "rows_count": snap["rows_count"],
+                "note": snap.get("note"),
+                "created_at": snap.get("created_at"),
+                "has_file": snap.get("has_file"),
+            },
+        }
 
     if view == "raw":
         raw_results = await _get_raw_results(upload_id)
@@ -625,6 +659,20 @@ async def get_results(upload_id: str, view: str | None = None):
         "view": "merged" if upload.get("has_raw_results") else "default",
         "has_merged": upload.get("has_raw_results", False),
     }
+
+
+@router.get("/{upload_id}/versions")
+async def list_inventory_versions(upload_id: str):
+    """List every saved version (snapshot) of an upload's inventory.
+
+    Newest first. The frontend's version dropdown reads from this — picking a
+    version then fetches `/{upload_id}/results?version=N`. The "live" current
+    state is whatever you get without a `?version=...` filter, which drifts
+    from the most-recent snapshot once the analyst makes inline edits.
+    """
+    from backend.services.inventory_versions import list_versions
+    versions = await list_versions(upload_id)
+    return {"upload_id": upload_id, "versions": versions}
 
 
 @router.get("/{upload_id}/download")
@@ -1362,6 +1410,19 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
 
         await _update_upload_results(upload_id, all_rows)
         logger.info(f"Upload {upload_id} complete: {len(all_rows)} total rows from {files_processed} files")
+
+        # Snapshot v0 — the original extraction state. Inline edits the analyst
+        # makes BEFORE any download work against the live data; v0 stays
+        # frozen so they can always revert to "what extraction first produced".
+        try:
+            from backend.services.inventory_versions import write_snapshot
+            await write_snapshot(
+                upload_id, all_rows,
+                source="extraction",
+                note=f"Initial extraction — {files_processed} file(s), {len(all_rows)} row(s)",
+            )
+        except Exception as e:
+            logger.warning("v0 snapshot write skipped for %s: %s", upload_id, e)
         if extraction_errors:
             logger.warning(
                 "Upload %s finished with %d file-level extraction error(s): %s",

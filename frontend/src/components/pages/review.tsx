@@ -55,11 +55,16 @@ export function ReviewPage({ onBack }: ReviewPageProps = {}) {
   const [saving, setSaving] = useState(false);
   const [approving, setApproving] = useState(false);
 
-  // Find the source file's PDF URL — use blob URL if available, otherwise serve from backend
+  // Find the source file's PDF URL — use blob URL if available, otherwise serve from backend.
+  // Note: extension check is case-INSENSITIVE so files like "COXBUS~1.PDF"
+  // (Windows 8.3 short filenames are upper-case) still resolve. The previous
+  // case-sensitive `.endsWith(".pdf")` check returned false for any uppercase
+  // .PDF and showed the "No document selected" placeholder even when a row
+  // was clearly selected.
   const sourceFile = upload?.files.find((f) => f.name === row?.sourceFile);
   const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const pdfUrl = sourceFile?.pdfUrl
-    || (upload && row?.sourceFile?.endsWith(".pdf")
+    || (upload && row?.sourceFile && row.sourceFile.toLowerCase().endsWith(".pdf")
       ? `${API_BASE}/api/uploads/${upload.id}/files/${encodeURIComponent(row.sourceFile)}`
       : undefined);
 
@@ -181,18 +186,26 @@ export function ReviewPage({ onBack }: ReviewPageProps = {}) {
         <ResizableHandle className="w-1 bg-border/30 hover:bg-emerald-500/50 transition-colors" />
 
         <ResizablePanel defaultSize={55} minSize={35}>
-          {/* Navigation — pinned at top */}
-          <div className="px-4 py-3 border-b border-border/50 flex items-center justify-between shrink-0">
-            <Button variant="outline" size="sm" disabled={currentIndex <= 0} onClick={() => navigate(-1)}>
-              <ChevronLeft className="w-4 h-4 mr-1" />Previous
-            </Button>
-            <span className="text-xs text-muted-foreground">{currentIndex + 1} of {rows.length}</span>
-            <Button variant="outline" size="sm" disabled={currentIndex >= rows.length - 1} onClick={() => navigate(1)}>
-              Next<ChevronRight className="w-4 h-4 ml-1" />
-            </Button>
-          </div>
-          <ScrollArea className="h-full">
-            <div className="p-4 space-y-6">
+          {/* Wrap in a flex column so the ScrollArea takes the height left over
+              after the nav bar — without this the `h-full` ScrollArea claims the
+              entire panel height including the nav, pushing its scrollable area
+              below the visible viewport so users can't scroll to the last fields
+              (Matt's image011 report). The `min-h-0` on the scroller's flex parent
+              is what actually lets the inner content overflow correctly. */}
+          <div className="h-full flex flex-col">
+            {/* Navigation — pinned at top */}
+            <div className="px-4 py-3 border-b border-border/50 flex items-center justify-between shrink-0">
+              <Button variant="outline" size="sm" disabled={currentIndex <= 0} onClick={() => navigate(-1)}>
+                <ChevronLeft className="w-4 h-4 mr-1" />Previous
+              </Button>
+              <span className="text-xs text-muted-foreground">{currentIndex + 1} of {rows.length}</span>
+              <Button variant="outline" size="sm" disabled={currentIndex >= rows.length - 1} onClick={() => navigate(1)}>
+                Next<ChevronRight className="w-4 h-4 ml-1" />
+              </Button>
+            </div>
+            <div className="flex-1 min-h-0">
+              <ScrollArea className="h-full">
+                <div className="p-4 space-y-6 pb-12">
               {displayFields.map((group) => (
                 <div key={group.group}>
                   <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">{group.group}</h3>
@@ -240,9 +253,10 @@ export function ReviewPage({ onBack }: ReviewPageProps = {}) {
                   <Separator className="mt-4 opacity-30" />
                 </div>
               ))}
+                </div>
+              </ScrollArea>
             </div>
-          </ScrollArea>
-
+          </div>
         </ResizablePanel>
       </ResizablePanelGroup>
     </div>

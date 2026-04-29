@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { useAppStore, type ExtractedRow } from "@/lib/store";
-import { apiExportExcel, apiImportCorrections, apiMerge, apiGetStatus, apiGetResults, apiGetResultsWithView } from "@/lib/api";
+import { apiExportExcel, apiImportCorrections, apiMerge, apiGetStatus, apiGetResults, apiGetResultsWithView, apiListVersions, type InventoryVersion } from "@/lib/api";
 import { mapAPIRowToStore } from "@/components/pages/upload";
 
 const confStyle = {
@@ -146,7 +146,15 @@ export function ResultsPage({ onReviewRow, onBack }: ResultsPageProps) {
   const [columnView, setColumnView] = useState<"compact" | "all">("compact");
   const [validationFilter, setValidationFilter] = useState<"all" | "needs-review" | "clean" | "compliance">("all");
 
-  // Check if merged results exist
+  // Inventory versioning (Apr 29) — analysts can switch between v0 (extraction)
+  // and each post-import snapshot (v1, v2, …). The default view shows the
+  // live data, which equals the latest snapshot at the moment of import then
+  // drifts with subsequent inline edits.
+  const [versions, setVersions] = useState<InventoryVersion[]>([]);
+  const [selectedVersion, setSelectedVersion] = useState<number | "live">("live");
+  const [versionRows, setVersionRows] = useState<ExtractedRow[] | null>(null);
+
+  // Check if merged results exist + load saved versions
   useEffect(() => {
     if (upload?.id) {
       apiGetResultsWithView(upload.id).then((resp) => {
@@ -155,10 +163,30 @@ export function ResultsPage({ onReviewRow, onBack }: ResultsPageProps) {
           if (viewMode === "default") setViewMode("merged");
         }
       }).catch(() => {});
+      apiListVersions(upload.id)
+        .then((resp) => setVersions(resp.versions || []))
+        .catch(() => {});
     }
   }, [upload?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const rows = (viewMode === "raw" && rawRows) ? rawRows : (upload?.results || []);
+  // When the user picks a frozen version, fetch its snapshot rows;
+  // when they switch back to "live", clear the snapshot so the live store data is used.
+  useEffect(() => {
+    if (selectedVersion === "live" || !upload?.id) {
+      setVersionRows(null);
+      return;
+    }
+    apiGetResultsWithView(upload.id, undefined, selectedVersion as number)
+      .then((resp) => {
+        const { mapAPIRowToStore } = require("@/components/pages/upload");
+        setVersionRows(resp.rows.map(mapAPIRowToStore));
+      })
+      .catch(() => setVersionRows(null));
+  }, [selectedVersion, upload?.id]);
+
+  const rows = versionRows
+    ? versionRows
+    : (viewMode === "raw" && rawRows) ? rawRows : (upload?.results || []);
   const carriers = [...new Set(rows.map((r) => r.carrier))];
 
   const filtered = useMemo(() => {
@@ -474,6 +502,32 @@ export function ResultsPage({ onReviewRow, onBack }: ResultsPageProps) {
               <SelectItem value="clean">Clean</SelectItem>
             </SelectContent>
           </Select>
+
+          {/* Inventory version picker — only shows once at least one snapshot exists.
+              "Live" is the current state (default); v0/v1/… are frozen snapshots
+              taken at extraction time and at each successful Excel re-import. */}
+          {versions.length > 0 && (
+            <Select
+              value={selectedVersion === "live" ? "live" : String(selectedVersion)}
+              onValueChange={(v) =>
+                setSelectedVersion(v === "live" ? "live" : Number(v ?? -1))
+              }
+            >
+              <SelectTrigger className="w-44 h-9">
+                <SelectValue placeholder="Version" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="live">
+                  Live (current)
+                </SelectItem>
+                {versions.map((v) => (
+                  <SelectItem key={v.version_number} value={String(v.version_number)}>
+                    v{v.version_number} · {v.source} · {v.rows_count} rows
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
 
           {/* Column-view toggle — Compact (8 cols) vs All (every field) */}
           <div className="flex items-center rounded-lg border border-border/50 overflow-hidden ml-auto">
