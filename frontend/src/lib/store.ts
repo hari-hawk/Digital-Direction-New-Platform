@@ -151,6 +151,11 @@ interface AppStore {
   addResults: (uploadId: string, rows: ExtractedRow[]) => void;
   reassignFileCarrier: (uploadId: string, fileName: string, newCarrier: string) => void;
   copyFileToCarrier: (uploadId: string, fileName: string, additionalCarrier: string) => void;
+  // Override the auto-detected document type. The classifier guesses based on
+  // filename + first-page text, but the user always knows better — letting
+  // them set this BEFORE extraction means the right prompt fires (csr vs
+  // contract vs invoice etc.) and their effort is captured upfront.
+  setFileDocType: (uploadId: string, fileName: string, docType: string) => void;
   deleteUpload: (uploadId: string) => void;
   setActiveUpload: (id: string | null) => void;
   setSelectedRow: (id: string | null) => void;
@@ -244,6 +249,21 @@ export const useAppStore = create<AppStore>()(
         const carriers = [...new Set(updatedFiles.map((f) => f.carrier).filter(Boolean))] as string[];
         return { ...u, files: updatedFiles, carriers };
       }),
+    }));
+  },
+
+  setFileDocType: (uploadId, fileName, docType) => {
+    set((state) => ({
+      uploads: state.uploads.map((u) =>
+        u.id !== uploadId
+          ? u
+          : {
+              ...u,
+              files: u.files.map((f) =>
+                f.name === fileName ? { ...f, docType } : f
+              ),
+            }
+      ),
     }));
   },
 

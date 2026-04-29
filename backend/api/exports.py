@@ -177,6 +177,131 @@ async def export_excel(upload_id: str, db: AsyncSession = Depends(get_db)):
 # ────────────────────────────────────────────────────────────────────────
 
 
+def _coerce_to_column_type(model_cls, field_name: str, raw: str):
+    """Cast a string to the ORM column's Python type so typed columns
+    (Integer, Numeric, Date) accept the value via setattr.
+
+    Returns None when coercion fails OR when the column doesn't exist.
+    Plain-text columns return the trimmed string unchanged.
+    """
+    from sqlalchemy import Integer, Numeric, Float, Boolean, Date, DateTime
+    from decimal import Decimal, InvalidOperation
+    from datetime import date, datetime
+
+    if not hasattr(model_cls, field_name):
+        return None
+    try:
+        col = getattr(model_cls, field_name).property.columns[0]
+        col_type = col.type
+    except (AttributeError, IndexError):
+        return raw
+
+    s = (raw or "").strip()
+    if not s:
+        return None
+
+    if isinstance(col_type, Integer):
+        try:
+            return int(float(s))  # tolerate "1.0" → 1
+        except (ValueError, TypeError):
+            return None
+    if isinstance(col_type, (Numeric, Float)):
+        try:
+            return Decimal(s)
+        except (InvalidOperation, ValueError, TypeError):
+            return None
+    if isinstance(col_type, Boolean):
+        return s.lower() in ("yes", "true", "y", "1")
+    if isinstance(col_type, Date):
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                continue
+        return None
+    if isinstance(col_type, DateTime):
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(s, fmt)
+            except ValueError:
+                continue
+        return None
+    return s  # String / Text / JSONB / etc.
+
+
+def _values_match_for_diff(a, b) -> bool:
+    """Decide whether an Excel-cell value should be treated as equal to a DB
+    value for the purpose of correction-diffing.
+
+    Handles the round-trip noise that the previous import accidentally treated
+    as corrections — Decimal('57.50') exported as float 57.5, dates as
+    `2019-12-31` strings vs `date(2019,12,31)` objects, blank-vs-None, etc.
+    Returns True if no real change was made by the analyst.
+    """
+    # Treat blanks as equal to blanks
+    a_blank = a is None or (isinstance(a, str) and not a.strip())
+    b_blank = b is None or (isinstance(b, str) and not b.strip())
+    if a_blank and b_blank:
+        return True
+    if a_blank != b_blank:
+        return False
+
+    # Numeric tolerance — Decimals round-trip via float lose trailing zeros
+    try:
+        af = float(a) if not isinstance(a, bool) else None
+        bf = float(b) if not isinstance(b, bool) else None
+        if af is not None and bf is not None:
+            return abs(af - bf) < 0.005  # half-cent tolerance for $ amounts
+    except (TypeError, ValueError):
+        pass
+
+    # Date / datetime tolerance — Excel may give strings or datetimes
+    from datetime import date, datetime
+    def _to_date(x):
+        if isinstance(x, date) and not isinstance(x, datetime):
+            return x
+        if isinstance(x, datetime):
+            return x.date()
+        if isinstance(x, str):
+            for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
+                try:
+                    return datetime.strptime(x.strip(), fmt).date()
+                except ValueError:
+                    continue
+        return None
+    da, db_ = _to_date(a), _to_date(b)
+    if da and db_:
+        return da == db_
+
+    # Generic string compare with whitespace folding
+    return str(a).strip() == str(b).strip()
+
+
+def _detect_header_layout(ws, known_labels: set[str]) -> tuple[int | None, int]:
+    """Find the row that holds the column-display-name headers.
+
+    Returns (header_row, data_start_row). Walks the first 5 rows and picks
+    whichever row matches the most known labels — handles both the new
+    customer-template export (row 3 is headers) and the legacy single-row
+    header export (row 1 is headers). If nothing matches, returns
+    (None, 2) so the caller can decide.
+    """
+    best_row = None
+    best_hits = 0
+    for r in range(1, min(ws.max_row, 5) + 1):
+        hits = 0
+        for c in range(1, ws.max_column + 1):
+            v = ws.cell(row=r, column=c).value
+            if v and str(v).strip() in known_labels:
+                hits += 1
+        if hits > best_hits:
+            best_hits = hits
+            best_row = r
+    if best_row is None or best_hits < 3:  # need at least 3 recognized columns to trust the layout
+        return None, 2
+    return best_row, best_row + 1
+
+
 def _build_extracted_data_sheet(ws, rows, column_specs, req_labels):
     """Sheet 1 — the actual extracted data, in customer column order.
 
@@ -416,13 +541,79 @@ async def import_corrections(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload corrected Excel, diff against extraction, store corrections."""
+    """Upload corrected Excel, diff against extraction, store corrections.
+
+    Reads the workbook label-driven (not position-driven) so it stays in sync
+    with the customer-template layout produced by `export_excel`:
+
+      Sheet 1 "Extracted Data" — area headers in row 1, required-level in row 2,
+      column display names in row 3, data starting at row 4.
+
+    The previous implementation hard-coded a 59-column position list and
+    `min_row=2`; the new export ships 61 columns + 3 header rows so positional
+    parsing was misaligning every row by 2 and silently writing wrong fields
+    into the corrections table. Matt's `image010` error came from here.
+
+    Diffing strategy:
+      - Map Excel column LABELS (row 3) back to ORM field names via the
+        export_template.yaml mapping. Any label we don't recognize is skipped
+        (forward-compatible if the customer adds a column to their template).
+      - Skip the rendered "Compliance Audit Flags" column on import — it's
+        platform-computed, not analyst input.
+      - Per-cell diff: when the Excel cell differs from the current DB value,
+        record a Correction (with embedding generation deferred to /api/review),
+        then write the corrected value onto the row.
+    """
     try:
         import openpyxl
 
         content = await file.read()
         wb = openpyxl.load_workbook(io.BytesIO(content))
-        ws = wb.active
+
+        # Pick the data sheet — prefer "Extracted Data" if present (new export),
+        # fall back to the active sheet (older single-sheet export).
+        if "Extracted Data" in wb.sheetnames:
+            ws = wb["Extracted Data"]
+        else:
+            ws = wb.active
+
+        # Build label → ORM field map from the export template (single source
+        # of truth). Falls back to the legacy _EXCEL_FIELDS list if the YAML
+        # is missing — keeps old workbooks importable.
+        template = _export_template()
+        column_specs = template.get("columns") or [
+            {"field": f, "label": l} for f, l in _EXCEL_FIELDS
+        ]
+        label_to_field = {spec["label"]: spec["field"] for spec in column_specs}
+        # Ignore platform-computed columns the analyst can't meaningfully edit.
+        IGNORE_LABELS = {"Compliance Audit Flags"}
+
+        # Detect which row holds the column-name headers + which row data starts.
+        # New export: row 1 = area, row 2 = required-level, row 3 = labels, row 4+ = data
+        # Legacy export: row 1 = labels, row 2+ = data
+        header_row, data_start_row = _detect_header_layout(ws, set(label_to_field.keys()))
+        if header_row is None:
+            return JSONResponse(status_code=400, content={
+                "error": "Could not locate column headers in the uploaded workbook. "
+                         "Use the export downloaded from this platform as the import template."
+            })
+
+        # Build column-index → ORM field name map for THIS workbook
+        col_to_field: dict[int, str] = {}
+        for c in range(1, ws.max_column + 1):
+            label = ws.cell(row=header_row, column=c).value
+            if not label:
+                continue
+            label = str(label).strip()
+            if label in IGNORE_LABELS:
+                continue
+            if label in label_to_field:
+                col_to_field[c] = label_to_field[label]
+        if not col_to_field:
+            return JSONResponse(status_code=400, content={
+                "error": "No recognized column headers in the uploaded workbook. "
+                         "Re-download the inventory from this platform and re-upload."
+            })
 
         # Find extraction run(s)
         run_result = await db.execute(
@@ -430,64 +621,81 @@ async def import_corrections(
         )
         runs = run_result.scalars().all()
         if not runs:
-            return JSONResponse(status_code=404, content={"error": "No extraction data found"})
+            return JSONResponse(status_code=404, content={"error": "No extraction data found for this upload"})
 
         run_ids = [r.id for r in runs]
-
-        # Load existing rows ordered by creation
         row_result = await db.execute(
             select(ExtractedRow)
             .where(ExtractedRow.extraction_run_id.in_(run_ids))
             .order_by(ExtractedRow.created_at)
         )
         db_rows = row_result.scalars().all()
-
         if not db_rows:
-            return JSONResponse(status_code=404, content={"error": "No rows to compare against"})
+            return JSONResponse(status_code=404, content={"error": "No rows in this upload to compare against"})
 
-        # Parse Excel rows (skip header)
-        excel_rows = list(ws.iter_rows(min_row=2, values_only=True))
+        # Diff each Excel row against the matching DB row
         corrections_created = 0
-
-        for idx, excel_values in enumerate(excel_rows):
+        rows_compared = 0
+        for idx, excel_row in enumerate(ws.iter_rows(min_row=data_start_row, values_only=True)):
             if idx >= len(db_rows):
                 break
             db_row = db_rows[idx]
+            rows_compared += 1
+            row_changed = False
 
-            for col_idx, (field_name, _) in enumerate(_EXCEL_FIELDS):
-                if col_idx >= len(excel_values):
-                    break
-                excel_val = excel_values[col_idx]
+            for col_idx, field_name in col_to_field.items():
+                excel_val = excel_row[col_idx - 1] if col_idx - 1 < len(excel_row) else None
                 db_val = getattr(db_row, field_name, None)
 
-                # Compare — normalize to string for comparison
-                excel_str = str(excel_val).strip() if excel_val is not None else None
-                db_str = str(db_val).strip() if db_val is not None else None
+                if _values_match_for_diff(excel_val, db_val):
+                    continue
 
-                if excel_str != db_str and excel_str:
-                    corr = Correction(
-                        extracted_row_id=db_row.id,
-                        extraction_run_id=db_row.extraction_run_id,
-                        field_name=field_name,
-                        extracted_value=db_str,
-                        corrected_value=excel_str,
-                        correction_type="excel_import",
-                        carrier=db_row.carrier,
+                excel_str = str(excel_val).strip() if excel_val not in (None, "") else None
+                db_str = str(db_val).strip() if db_val not in (None, "") else None
+                # Skip blank-Excel-cell-against-populated-DB-value: an analyst
+                # who DELETES a value should use the UI; an empty cell on
+                # import is more often "didn't touch it" than "wanted to clear".
+                if excel_str is None:
+                    continue
+                # Coerce to the ORM column's Python type so typed columns
+                # (Integer, Numeric, Date) don't blow up when given a string.
+                # Falls back to the raw string for plain-text columns.
+                coerced = _coerce_to_column_type(ExtractedRow, field_name, excel_str)
+                if coerced is None and excel_str:
+                    # Couldn't coerce — log but don't crash the import; record the
+                    # correction with the raw text so the analyst's intent is captured.
+                    coerced = excel_str
+                db.add(Correction(
+                    extracted_row_id=db_row.id,
+                    extraction_run_id=db_row.extraction_run_id,
+                    field_name=field_name,
+                    extracted_value=db_str,
+                    corrected_value=excel_str,
+                    correction_type="excel_import",
+                    carrier=db_row.carrier,
+                ))
+                try:
+                    setattr(db_row, field_name, coerced)
+                except (TypeError, ValueError) as e:
+                    logger.warning(
+                        "import_corrections: skipped writing %s=%r on row %s: %s",
+                        field_name, coerced, db_row.id, e,
                     )
-                    db.add(corr)
+                    continue
+                corrections_created += 1
+                row_changed = True
 
-                    # Apply correction to row
-                    setattr(db_row, field_name, excel_str)
-                    corrections_created += 1
-
-            db_row.review_status = "corrected"
+            if row_changed:
+                db_row.review_status = "corrected"
 
         await db.commit()
-
         return {
             "upload_id": upload_id,
-            "rows_compared": min(len(excel_rows), len(db_rows)),
+            "rows_compared": rows_compared,
             "corrections_created": corrections_created,
+            "columns_recognized": len(col_to_field),
+            "header_row": header_row,
+            "data_start_row": data_start_row,
         }
 
     except Exception as e:

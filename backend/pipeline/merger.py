@@ -272,6 +272,13 @@ def rule_based_merge(
     # Load carrier-specific merge rules (or safe defaults)
     merge_rules = get_config_store().get_merge_rules(carrier) if carrier else MergeRulesConfig()
 
+    # Pre-merge: split contract rows that carry multiple account numbers in
+    # one field (e.g. "614-718-4339 & 614-761-5500") into one row per account
+    # so the per-account merge below can correlate each one with the matching
+    # invoice. Without this, the contract's data sits in a single combined-key
+    # group and never bridges to the invoice rows.
+    extractions = _split_multi_account_contract_rows(extractions, doc_types)
+
     # Group rows by account + phone number (merge key)
     groups: dict[str, list[tuple[str, str, ExtractedRow]]] = defaultdict(list)
 
@@ -343,15 +350,115 @@ _ACCOUNT_LEVEL_FIELDS = [
 ]
 
 
+def _split_multi_account_contract_rows(
+    extractions: dict[str, list[ExtractedRow]],
+    doc_types: dict[str, str],
+) -> dict[str, list[ExtractedRow]]:
+    """Split a single contract row that carries N accounts → N rows, one per account.
+
+    Real-world contracts often list multiple accounts in one field (e.g.
+    AT&T's "Customer Account Number: 614-718-4339 & 614-761-5500"), and the
+    LLM faithfully captures the joined string. The merger keys on a single
+    account number per row, so the contract's terms never reach any invoice.
+
+    This helper detects rows whose carrier_account_number contains a
+    delimiter (`&` / `,` / `;` / ` and `) and splits them into separate
+    rows — each with the same contract terms, but a single distinct
+    account number — so the per-account merge below can correlate each
+    one with its matching invoice.
+
+    Only applies to contract / subscription rows. Invoice / CSR rows
+    pass through unchanged (their account numbers are always single).
+    """
+    delim_re = re.compile(r"\s*(?:&|/|,|;|\band\b)\s*", flags=re.IGNORECASE)
+
+    out: dict[str, list[ExtractedRow]] = {}
+    total_split = 0
+    for doc_id, rows in extractions.items():
+        dt = (doc_types.get(doc_id) or "").lower()
+        if dt not in ("contract", "subscription"):
+            out[doc_id] = rows
+            continue
+
+        new_rows: list[ExtractedRow] = []
+        for row in rows:
+            acct_field = (row.carrier_account_number or "").strip()
+            parts = [p.strip() for p in delim_re.split(acct_field) if p.strip()]
+            # Keep only parts that contain enough digits to be a real account
+            digit_parts = [p for p in parts if len(re.sub(r"\D", "", p)) >= 7]
+            if len(digit_parts) <= 1:
+                new_rows.append(row)
+                continue
+
+            # Real multi-account row — clone per account number
+            for acct in digit_parts:
+                clone = row.model_copy(deep=True)
+                clone.carrier_account_number = acct
+                new_rows.append(clone)
+            total_split += 1
+
+        out[doc_id] = new_rows
+
+    if total_split:
+        logger.info(
+            "Multi-account contract split: %d row(s) cloned per-account so "
+            "their terms can correlate with each matching invoice",
+            total_split,
+        )
+    return out
+
+
+def _account_prefix_bridge(
+    acct_groups: dict[str, list[ExtractedRow]],
+) -> dict[str, list[ExtractedRow]]:
+    """Merge account groups when one normalized key is a prefix of another.
+
+    Real carriers often use related-but-not-identical account formats across
+    documents — e.g. AT&T contracts cite the 10-digit BTN form (`6147184339`)
+    while invoices use the 13-digit canonical form with circuit/check digits
+    (`6147184339152`). Strict equality on the normalized key puts them in
+    separate groups and the merger never bridges them.
+
+    This pass walks the groups; for any key K that is a STRICT prefix of
+    another longer key L (and K is at least 7 digits), we move K's rows
+    into L's group. The contract's data thus joins the matching invoice's
+    group and propagation can carry contract terms onto invoice rows.
+
+    Only triggered for digit-only normalized keys, so it's safe across
+    carriers — non-digit keys (alpha, hashed, etc.) are left alone.
+    """
+    keys = sorted(acct_groups.keys(), key=len, reverse=True)  # longest first
+    bridged = 0
+    for k_short in list(acct_groups.keys()):
+        if not k_short or not k_short.isdigit() or len(k_short) < 7:
+            continue
+        # Find a longer digit-only key starting with k_short
+        for k_long in keys:
+            if k_long != k_short and k_long.startswith(k_short) and k_long.isdigit():
+                # Move all rows from short → long group, then drop short.
+                acct_groups[k_long].extend(acct_groups[k_short])
+                bridged += len(acct_groups[k_short])
+                del acct_groups[k_short]
+                break
+    if bridged:
+        logger.info(
+            "Account prefix bridge: %d row(s) moved into longer-account groups "
+            "so contract↔invoice fields propagate across format differences",
+            bridged,
+        )
+    return acct_groups
+
+
 def _propagate_account_fields(
     rows: list[ExtractedRow],
     merge_rules: MergeRulesConfig,
 ) -> list[ExtractedRow]:
     """Fill account-level fields from any row that has them to rows that don't.
 
-    Groups rows by normalized account number. Within each group, finds the
-    best value for each account-level field (from the row with the most
-    populated fields), then fills gaps on other rows.
+    Groups rows by normalized account number, bridges prefix-related groups
+    (e.g. 10-digit AT&T BTN form ↔ 13-digit invoice canonical), then within
+    each (possibly merged) group, finds the best value for each account-level
+    field and fills gaps on other rows.
     """
     acct_config = merge_rules.account_normalization
 
@@ -360,6 +467,10 @@ def _propagate_account_fields(
     for row in rows:
         acct = _normalize_account(row.carrier_account_number or "", acct_config)
         acct_groups[acct].append(row)
+
+    # Bridge groups whose keys differ only by a longer-form suffix (e.g.
+    # contract has "6147184339" while invoice has "6147184339152").
+    acct_groups = _account_prefix_bridge(acct_groups)
 
     filled_count = 0
     # Exclude fields that should NOT propagate at account level (multi-location carriers)
@@ -1491,10 +1602,14 @@ def _apply_field_normalization(
 
     # ── Derive currently_month_to_month from contract dates ──
     # If a row has contract_expiration_date and it's in the past, the service
-    # is operating month-to-month. If it's in the future, it's under contract.
-    # This is a logical derivation, not analyst judgment.
-    if raw_config.get("derive_currently_month_to_month", False):
-        from datetime import date
+    # is operating month-to-month. If it's in the future, it's under contract
+    # (currently_month_to_month = "No"). This is a logical derivation, not
+    # analyst judgment, and applies universally — Matt's Apr 29 feedback was
+    # that the platform should default to "No" on active contracts even when
+    # the source doesn't say so explicitly. The carrier-config flag
+    # `derive_currently_month_to_month: false` is honored as an opt-out.
+    if raw_config.get("derive_currently_month_to_month", True):
+        from datetime import date, datetime
         today = date.today()
         mtm_count = 0
         for row in rows:
@@ -1503,16 +1618,54 @@ def _apply_field_normalization(
             exp = row.contract_expiration_date
             if exp:
                 try:
-                    exp_date = date.fromisoformat(str(exp))
-                    if exp_date < today:
-                        row.currently_month_to_month = "Yes"
+                    if isinstance(exp, datetime):
+                        exp_date = exp.date()
+                    elif isinstance(exp, date):
+                        exp_date = exp
                     else:
-                        row.currently_month_to_month = "No"
+                        exp_date = date.fromisoformat(str(exp)[:10])
+                    row.currently_month_to_month = "Yes" if exp_date < today else "No"
                     mtm_count += 1
                 except (ValueError, TypeError):
                     pass
         if mtm_count:
             logger.info(f"Month-to-month derivation: {mtm_count} values derived from contract dates")
+
+    # ── Derive billing_per_contract on rows with an active contract ──
+    # Matt's Apr 29 ask: when a contract is on file and active, the column
+    # shouldn't stay blank — it should reflect whether billing matches the
+    # contract. We don't always have a per-line contract rate to compare
+    # against, so the safe baseline is:
+    #   - active contract + no rate-mismatch flag yet → "Yes"
+    #   - active contract + suspected mismatch       → "No — verify"
+    #   - no contract or expired                      → leave blank (analyst override)
+    # The compliance audit (compliance.py::_check_rate_mismatch) still runs
+    # afterwards and can replace "Yes" with a specific finding when an MRC
+    # mismatch is detected.
+    if raw_config.get("derive_billing_per_contract", True):
+        from datetime import date, datetime
+        today = date.today()
+        bpc_count = 0
+        for row in rows:
+            if row.billing_per_contract:
+                continue
+            exp = row.contract_expiration_date
+            if not exp or row.currently_month_to_month == "Yes":
+                continue
+            try:
+                if isinstance(exp, datetime):
+                    exp_date = exp.date()
+                elif isinstance(exp, date):
+                    exp_date = exp
+                else:
+                    exp_date = date.fromisoformat(str(exp)[:10])
+                if exp_date >= today and row.monthly_recurring_cost:
+                    row.billing_per_contract = "Yes"
+                    bpc_count += 1
+            except (ValueError, TypeError):
+                continue
+        if bpc_count:
+            logger.info(f"Billing-per-contract derivation: {bpc_count} rows defaulted to 'Yes' on active contracts")
 
     # ── Derive cost_per_unit from MRC / quantity ──
     # Config: derive_cost_per_unit: true

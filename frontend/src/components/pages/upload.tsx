@@ -812,7 +812,38 @@ export function UploadPage({ onViewResults }: UploadPageProps) {
                       <FileText className={`w-4 h-4 shrink-0 ${fileColors[ext(f.name)] || "text-muted-foreground"}`} />
                       <span className="flex-1 truncate text-muted-foreground">{f.name}</span>
                       <span className="text-xs text-muted-foreground">{(f.size / 1024).toFixed(0)} KB</span>
-                      {f.docType && <Badge variant="secondary" className="text-[10px]">{f.docType}</Badge>}
+
+                      {/* Doc-type override — shown pre-extraction so the user can correct
+                          the auto-detected type before the wrong prompt fires. Pre-fills
+                          with what the classifier guessed; defaults to "invoice" when blank. */}
+                      {!extracting && !isInterruptedOrFailed && f.status === "classified" ? (
+                        <Select
+                          value={f.docType || "invoice"}
+                          onValueChange={(v: string) => {
+                            if (v && upload) {
+                              store.setFileDocType(upload.id, f.name, v);
+                              toast.success(`"${f.name}" → ${v}`);
+                            }
+                          }}
+                        >
+                          <SelectTrigger className="h-6 w-28 text-[10px]">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="invoice">invoice</SelectItem>
+                            <SelectItem value="csr">csr</SelectItem>
+                            <SelectItem value="contract">contract</SelectItem>
+                            <SelectItem value="report">report</SelectItem>
+                            <SelectItem value="did_list">did_list</SelectItem>
+                            <SelectItem value="subscription">subscription</SelectItem>
+                            <SelectItem value="email">email</SelectItem>
+                            <SelectItem value="service_guide">service_guide</SelectItem>
+                            <SelectItem value="other">other</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        f.docType && <Badge variant="secondary" className="text-[10px]">{f.docType}</Badge>
+                      )}
 
                       {/* Per-file carrier reassign */}
                       {!extracting && !isInterruptedOrFailed && f.status === "classified" && (

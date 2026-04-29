@@ -71,14 +71,44 @@ def _propagate_account_level_fields_in_dicts(rows: list[dict]) -> None:
     if not rows:
         return
     from collections import defaultdict
+    import re as _re_local
+
+    # Normalize the account-number key: strip non-digits so format differences
+    # (614-718-4339 vs 6147184339152) collapse onto the same digit string,
+    # which lets the prefix-bridge below merge contract-form keys into the
+    # longer invoice-form key for the same service.
+    def _key(r: dict) -> str:
+        raw = (r.get("carrier_account_number") or "").strip()
+        digits = _re_local.sub(r"\D", "", raw)
+        return digits or raw  # keep alphanumeric-only accounts intact
 
     groups: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
-        # Normalize: strip + lower so "12345" and " 12345 " group together.
-        # Empty account_number rows form their own group ("") — those usually
-        # are document-level summaries and won't propagate cross-document.
-        key = (r.get("carrier_account_number") or "").strip()
-        groups[key].append(r)
+        groups[_key(r)].append(r)
+
+    # Account prefix bridge — same logic as merger._account_prefix_bridge.
+    # If a contract row's normalized key (e.g. "6147184339") is a prefix of
+    # an invoice row's normalized key ("6147184339152"), they describe the
+    # same service in different document formats. Move the contract group's
+    # rows into the longer-key group so propagation carries contract terms
+    # onto every invoice row.
+    keys_by_len = sorted(groups.keys(), key=len, reverse=True)
+    bridged = 0
+    for k_short in list(groups.keys()):
+        if not k_short or not k_short.isdigit() or len(k_short) < 7:
+            continue
+        for k_long in keys_by_len:
+            if k_long != k_short and k_long.startswith(k_short) and k_long.isdigit():
+                groups[k_long].extend(groups[k_short])
+                bridged += len(groups[k_short])
+                del groups[k_short]
+                break
+    if bridged:
+        logger.info(
+            "Account prefix bridge (extract-time): moved %d rows so "
+            "contract↔invoice fields propagate across format differences",
+            bridged,
+        )
 
     filled = 0
     for key, group in groups.items():
@@ -1063,6 +1093,33 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
         # results stop being silent (e.g. PDF too big for the model).
         extraction_errors: list[dict] = []
 
+        # ── Load correction hints for self-healing feedback ──
+        # The CLI path (orchestrator.py) loads these and passes them to the
+        # extractor so past analyst corrections inject into the prompt and the
+        # LLM avoids repeating the same mistake. The API path (this function,
+        # which the website uses) didn't pre-Apr-29 — meaning UI corrections
+        # never fed back into the next extraction. Closing that loop here so
+        # the platform actually learns from the analyst's edits.
+        correction_hints_by_carrier: dict[str, list] = {}
+        try:
+            from backend.services.feedback import get_relevant_corrections
+            carriers_in_batch = {a.get("carrier") for a in file_assignments if a.get("carrier")}
+            for carrier_display in carriers_in_batch:
+                # Try the canonical carrier key first (matches how corrections
+                # are stored), fall back to the display name.
+                ckey = _carrier_display_to_key(carrier_display) or carrier_display
+                hints = get_relevant_corrections(ckey)
+                if not hints and ckey != carrier_display:
+                    hints = get_relevant_corrections(carrier_display)
+                if hints:
+                    # Store under both keys so the per-file lookup below works
+                    # regardless of which form the assignment carries.
+                    correction_hints_by_carrier[ckey] = hints
+                    correction_hints_by_carrier[carrier_display] = hints
+                    logger.info("Loaded %d correction hint(s) for %s", len(hints), carrier_display)
+        except Exception as e:
+            logger.debug("Correction hint loading skipped: %s", e)
+
         for assignment in file_assignments:
             # Check if cancel was requested
             upload_check = await _get_upload(upload_id)
@@ -1100,8 +1157,19 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
 
                 # Extract — collect per-section errors so silent failures
                 # (oversized prompt, JSON parse error, timeout) are surfaced.
+                # Also pass past correction hints for this carrier so analyst
+                # edits from prior uploads steer the LLM away from the same
+                # mistake (the "system learns from us" loop).
                 file_errors: list[str] = []
-                rows, responses = await extract_document(parsed, errors_out=file_errors)
+                hints = (
+                    correction_hints_by_carrier.get(carrier_key)
+                    or correction_hints_by_carrier.get(carrier_display)
+                )
+                rows, responses = await extract_document(
+                    parsed,
+                    errors_out=file_errors,
+                    correction_hints=hints,
+                )
                 if file_errors:
                     extraction_errors.append({
                         "filename": filename,
