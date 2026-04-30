@@ -61,12 +61,12 @@ jobs:
               '"'"'
 
               echo "==> Building frontend..."
-              sudo bash -c '
+              sudo bash -c "
                 set -e
                 cd /home/dhanapal_s/Digital-Direction-New-Platform/frontend
                 /root/.bun/bin/bun install --frozen-lockfile
                 NEXT_PUBLIC_API_URL=https://dg-api.techjays.com /root/.bun/bin/bun run build
-              '
+              "
 
               echo "==> Restarting services..."
               sudo systemctl restart dd-backend
