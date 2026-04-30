@@ -449,6 +449,165 @@ def _account_prefix_bridge(
     return acct_groups
 
 
+# ============================================
+# Multi-contract-per-account scoped propagation (Matt's Tst 6 complexity)
+#
+# The "blanket" propagation in _propagate_account_fields below assumes ONE
+# contract governs all rows on an account. That's true for ~95% of telecom
+# accounts, but a real-world subset has multiple services on a single
+# account each with their own contract — a 36-month Ethernet pricing
+# schedule alongside a month-to-month VoIP add-on, for example.
+#
+# When that happens, blanket propagation would overwrite each service's
+# correct contract terms with whichever contract row appeared first. The
+# scoped helper below kicks in ONLY when we detect 2+ distinct contract
+# fingerprints on the same account; otherwise the existing single-contract
+# code path runs untouched (this is the explicit non-breaking guard).
+#
+# Detection: a contract row is one carrying any of the four core contract
+# fields (term, begin date, expiration date, contract number). Two
+# contracts are "distinct" when they disagree on any of (term, expiration,
+# contract_number).
+#
+# Matching: each contract's scope is the union of its non-blank
+# {service_type, phone_number, usoc, contract_number} markers. Each
+# non-contract row is assigned to the contract with the highest scope
+# overlap (≥1 marker match required — rows that match nothing keep
+# whatever values they came in with).
+# ============================================
+
+# Contract metadata fields we move under scoped control. Non-contract
+# account-level fields (billing_name, address, currency, etc.) still flow
+# via the normal blanket propagation since those don't change per-contract.
+_CONTRACT_SCOPE_FIELDS = (
+    "contract_term_months", "contract_begin_date", "contract_expiration_date",
+    "contract_number", "contract_number_2",
+    "currently_month_to_month", "mtm_or_less_than_year",
+    "billing_per_contract", "auto_renew", "auto_renewal_notes",
+    "contract_info_received",
+)
+
+# Markers used to score contract↔service match. Order doesn't change
+# scoring (each match is +1) but listing in priority order helps reading.
+_CONTRACT_SCOPE_MARKERS = (
+    "contract_number",  # strongest: explicit contract id
+    "service_type",     # strong: "Ethernet" vs "VoIP" splits cleanly
+    "phone_number",     # phone-by-phone scoping (DID-level riders)
+    "usoc",             # USOC-list contracts
+)
+
+
+def _contract_fingerprint(row: ExtractedRow) -> tuple:
+    """Stable 3-tuple identifying which contract a row carries. Two rows
+    with the same fingerprint refer to the same underlying contract.
+    Used to count distinct contracts in an account group."""
+    return (
+        getattr(row, "contract_term_months", None),
+        str(getattr(row, "contract_expiration_date", None) or "").strip(),
+        (str(getattr(row, "contract_number", None) or "")
+         .strip().lower()),
+    )
+
+
+def _is_contract_row(row: ExtractedRow) -> bool:
+    """A row is "contract-flavor" when any core contract field is set.
+    We don't gate on doc_type here because the merger already mixes rows
+    from invoice/csr/contract sources by the time we reach propagation."""
+    return any(
+        getattr(row, f, None) not in (None, "")
+        for f in ("contract_term_months", "contract_begin_date",
+                  "contract_expiration_date", "contract_number")
+    )
+
+
+def _scope_markers_of(row: ExtractedRow) -> dict[str, str]:
+    """Build the marker dict used to score contract↔service matches."""
+    out: dict[str, str] = {}
+    for k in _CONTRACT_SCOPE_MARKERS:
+        v = getattr(row, k, None)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if not s or s.lower() in ("none", "null"):
+            continue
+        # Phone numbers — strip non-digits so format variation doesn't kill the match
+        if k == "phone_number":
+            digits = re.sub(r"\D", "", s)
+            if digits:
+                s = digits
+        out[k] = s.lower()
+    return out
+
+
+def _try_scoped_contract_propagation(
+    group: list[ExtractedRow],
+) -> bool:
+    """Detect multi-contract case in an account group; if found, propagate
+    contract fields to scope-matched service rows.
+
+    Returns True when scoped propagation ran (caller should skip the
+    blanket loop for `_CONTRACT_SCOPE_FIELDS` on this group). Returns
+    False when 0-or-1 distinct contracts are present — the common case
+    that leaves today's blanket logic untouched.
+    """
+    contract_rows = [r for r in group if _is_contract_row(r)]
+    if len(contract_rows) <= 1:
+        return False
+
+    # How many DISTINCT contracts? Two contract rows with identical
+    # fingerprints are the same contract repeated (legitimate when a
+    # single contract appears once per service line of the same account).
+    distinct = {_contract_fingerprint(r) for r in contract_rows}
+    if len(distinct) <= 1:
+        return False
+
+    # ---- We have 2+ distinct contracts on this account. Scoped path. ----
+    # Pre-compute each contract's scope so the inner loop is O(rows × contracts).
+    contract_scopes = [(r, _scope_markers_of(r)) for r in contract_rows]
+    # Drop contract rows whose scope is empty — they have nothing to match
+    # services against. They still count as contracts for fingerprint
+    # detection above, but can't be scoped targets.
+    scopable = [(r, sc) for r, sc in contract_scopes if sc]
+    if not scopable:
+        return False
+
+    matched_count = 0
+    for row in group:
+        if _is_contract_row(row):
+            continue
+        row_markers = _scope_markers_of(row)
+        if not row_markers:
+            continue
+        best_contract = None
+        best_score = 0
+        for cr, cs in scopable:
+            score = sum(1 for k, v in cs.items() if row_markers.get(k) == v)
+            if score > best_score:
+                best_score = score
+                best_contract = cr
+        if best_contract and best_score > 0:
+            for f in _CONTRACT_SCOPE_FIELDS:
+                cur = getattr(row, f, None)
+                if cur is None or (isinstance(cur, str) and not cur.strip()):
+                    val = getattr(best_contract, f, None)
+                    if val is not None and str(val).strip():
+                        setattr(row, f, val)
+                        matched_count += 1
+    if matched_count:
+        logger.info(
+            "Multi-contract scoped propagation: %d contract field(s) attached "
+            "to %d distinct contract(s) on a multi-contract account",
+            matched_count, len(distinct),
+        )
+    else:
+        logger.info(
+            "Multi-contract account detected (%d distinct contracts) but no "
+            "rows matched any contract scope — service rows kept as-extracted",
+            len(distinct),
+        )
+    return True
+
+
 def _propagate_account_fields(
     rows: list[ExtractedRow],
     merge_rules: MergeRulesConfig,
@@ -459,6 +618,12 @@ def _propagate_account_fields(
     (e.g. 10-digit AT&T BTN form ↔ 13-digit invoice canonical), then within
     each (possibly merged) group, finds the best value for each account-level
     field and fills gaps on other rows.
+
+    For accounts where multiple distinct contracts apply to different services
+    (Matt's Tst 6 complexity), runs `_try_scoped_contract_propagation` first
+    to attach each contract's terms only to its scope-matched service rows.
+    The blanket loop then skips contract fields for those groups so it
+    doesn't overwrite the scoped values.
     """
     acct_config = merge_rules.account_normalization
 
@@ -472,19 +637,37 @@ def _propagate_account_fields(
     # contract has "6147184339" while invoice has "6147184339152").
     acct_groups = _account_prefix_bridge(acct_groups)
 
+    # Run scoped contract propagation per group BEFORE the blanket loop.
+    # Tracks which groups went down the scoped path so the blanket loop
+    # can skip contract fields for them (otherwise it would re-fill from
+    # the first contract row encountered and overwrite our per-service work).
+    scoped_groups: set[str] = set()
+    for acct, group in acct_groups.items():
+        if _try_scoped_contract_propagation(group):
+            scoped_groups.add(acct)
+
     filled_count = 0
     # Exclude fields that should NOT propagate at account level (multi-location carriers)
     non_propagating = set(merge_rules.non_propagating_fields) if merge_rules else set()
     # Include carrier-specific extra propagation fields (e.g., AT&T contract dates)
     all_fields = list(_ACCOUNT_LEVEL_FIELDS) + list(merge_rules.extra_propagation_fields)
     propagatable = [f for f in all_fields if f not in non_propagating]
+    contract_scope_set = set(_CONTRACT_SCOPE_FIELDS)
     for acct, group in acct_groups.items():
         if len(group) <= 1:
             continue
 
+        # When this account already went through scoped propagation, hold
+        # contract fields out of the blanket loop. Other account-level fields
+        # (billing_name, address, etc.) still flow normally.
+        group_propagatable = (
+            [f for f in propagatable if f not in contract_scope_set]
+            if acct in scoped_groups else propagatable
+        )
+
         # Collect best value for each account-level field
         best_values: dict[str, str] = {}
-        for field in propagatable:
+        for field in group_propagatable:
             for row in group:
                 val = getattr(row, field, None)
                 if val is not None and str(val).strip():
@@ -503,7 +686,8 @@ def _propagate_account_fields(
 
     if filled_count:
         logger.info(f"Account-level propagation: filled {filled_count} fields "
-                    f"across {len(acct_groups)} account groups")
+                    f"across {len(acct_groups)} account groups "
+                    f"({len(scoped_groups)} multi-contract group(s) used scoped path)")
 
     # Derive country from zip when country is blank.
     # This is a per-row INFERENCE from the zip's pattern (no hardcoded
