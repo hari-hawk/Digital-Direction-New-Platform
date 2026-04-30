@@ -33,26 +33,34 @@ jobs:
             --ssh-flag="-o StrictHostKeyChecking=no" \
             --command='
               set -e
-              cd /home/dhanapal_s/Digital-Direction-New-Platform
 
-              echo "==> Pulling latest code..."
-              git config --global --add safe.directory /home/dhanapal_s/Digital-Direction-New-Platform
-              git pull origin main
+              echo "==> Running deploy as dhanapal_s..."
+              sudo -u dhanapal_s bash -c '"'"'
+                set -e
+                cd /home/dhanapal_s/Digital-Direction-New-Platform
 
-              echo "==> Installing Python dependencies..."
-              source backend/venv/bin/activate && pip install -e . --quiet
+                echo "==> Pulling latest code..."
+                git config --global --add safe.directory /home/dhanapal_s/Digital-Direction-New-Platform
+                git pull origin main
 
-              echo "==> Running database migrations..."
-              for f in $(ls db/migrations/*.sql | sort); do
-                echo "  Applying $f..."
-                PGPASSWORD=dd_local_dev psql -h localhost -p 5433 -U dd_user -d digital_direction -f "$f"
-              done
+                echo "==> Installing Python dependencies..."
+                source backend/venv/bin/activate && pip install -e . --quiet
 
-              echo "==> Building frontend..."
-              cd frontend
-              bun install --frozen-lockfile
-              NEXT_PUBLIC_API_URL=https://dg-api.techjays.com bun run build
-              cd ..
+                echo "==> Checking postgres is reachable..."
+                PGPASSWORD=dd_local_dev psql -h localhost -p 5433 -U dd_user -d digital_direction -c "SELECT 1" > /dev/null
+
+                echo "==> Running database migrations..."
+                for f in $(ls db/migrations/*.sql | sort); do
+                  echo "  Applying $f..."
+                  PGPASSWORD=dd_local_dev psql -h localhost -p 5433 -U dd_user -d digital_direction -f "$f"
+                done
+
+                echo "==> Building frontend..."
+                cd frontend
+                bun install --frozen-lockfile
+                NEXT_PUBLIC_API_URL=https://dg-api.techjays.com bun run build
+                cd ..
+              '"'"'
 
               echo "==> Restarting services..."
               sudo systemctl restart dd-backend
