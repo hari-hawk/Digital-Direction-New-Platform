@@ -253,6 +253,35 @@ async def submit_correction(
     await db.commit()
     await db.refresh(corr)
 
+    # Sync the correction back to uploads.results JSONB so the Results page
+    # reflects the edit immediately. Without this, inline edits live in the
+    # extracted_rows typed table but the cached JSONB the UI reads is stale —
+    # the user makes a change, hits save, sees "saved" but the row still
+    # shows the old value until the next extraction or merge. Same fix
+    # applied in /api/exports/corrections/import.
+    try:
+        if row.upload_id:
+            from backend.models.orm import Upload as UploadOrm
+            from backend.services import upload_store as us
+            up_orm = (await db.execute(
+                select(UploadOrm).where(UploadOrm.id == row.upload_id)
+            )).scalar_one_or_none()
+            short_id = up_orm.short_id if up_orm else None
+            if short_id:
+                upload_state = await us.get_upload(short_id)
+                jsonb_rows = (upload_state or {}).get("results", []) or []
+                src_docs = row.source_documents or []
+                redis_id = src_docs[0].get("redis_id") if src_docs else None
+                if redis_id:
+                    for jr in jsonb_rows:
+                        if jr.get("id") == redis_id:
+                            jr[correction.field_name] = correction.corrected_value
+                            jr["status"] = jr.get("status") or row.status
+                            break
+                    await us.update_upload_results(short_id, jsonb_rows)
+    except Exception as e:
+        logger.warning("Inline edit JSONB sync skipped: %s", e)
+
     # Generate embedding for pgvector similarity search (inline, ~200ms)
     # Uses raw SQL because SQLAlchemy ORM doesn't support pgvector column type
     try:

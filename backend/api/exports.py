@@ -691,6 +691,78 @@ async def import_corrections(
 
         await db.commit()
 
+        # Sync the corrections back into uploads.results JSONB so the frontend
+        # sees the analyst's edits immediately.
+        #
+        # Why this is needed: extracted_rows (typed Postgres table) is the
+        # durable system of record, but the Results page in the UI reads
+        # from uploads.results JSONB (a denormalised cache populated at
+        # extraction time). Without this sync, the import endpoint writes to
+        # the truth-of-record but the cached view still shows the pre-import
+        # data — analysts re-uploaded the corrected Excel and still saw their
+        # old values on screen. (Same issue affected /api/review inline edits
+        # — fix that too in a follow-up.)
+        #
+        # Match strategy: each JSONB row carries an `id` like
+        # "<upload_id>-<filename>-<i>", and each ExtractedRow stores the same
+        # value in source_documents[0].redis_id. So we build an id→jsonb_idx
+        # map then walk db_rows once, copying ORM-mapped fields onto the
+        # matching JSONB row. JSONB-only fields (extraction_order, validation_
+        # issues, compliance_flags, etc.) are preserved.
+        if corrections_created > 0:
+            try:
+                from backend.services import upload_store as us
+                upload_state = await us.get_upload(upload_id)
+                jsonb_rows = (upload_state or {}).get("results", []) or []
+                # Build id → jsonb_idx map
+                id_to_idx: dict[str, int] = {}
+                for i, r in enumerate(jsonb_rows):
+                    rid = r.get("id")
+                    if rid:
+                        id_to_idx[rid] = i
+
+                # ORM column names that we'll sync (everything except internal
+                # primary keys / extraction_run_id / timestamps).
+                _SKIP_SYNC = {"id", "extraction_run_id", "primary_document_id",
+                              "created_at", "updated_at", "source_documents",
+                              "field_confidence", "field_sources"}
+                synced = 0
+                for db_row in db_rows:
+                    src_docs = db_row.source_documents or []
+                    redis_id = src_docs[0].get("redis_id") if src_docs else None
+                    if not redis_id or redis_id not in id_to_idx:
+                        continue
+                    target = jsonb_rows[id_to_idx[redis_id]]
+                    for col in db_row.__table__.columns:
+                        if col.name in _SKIP_SYNC:
+                            continue
+                        v = getattr(db_row, col.name)
+                        if v is None:
+                            target[col.name] = None
+                        elif hasattr(v, "isoformat"):
+                            target[col.name] = v.isoformat()
+                        elif isinstance(v, uuid.UUID):
+                            target[col.name] = str(v)
+                        elif hasattr(v, "as_tuple"):  # Decimal
+                            target[col.name] = float(v)  # JSON-friendly
+                        else:
+                            target[col.name] = v
+                    synced += 1
+
+                if synced:
+                    await us.update_upload_results(upload_id, jsonb_rows)
+                    logger.info(
+                        "import_corrections: synced %d row(s) of corrections "
+                        "back to uploads.results JSONB so the UI reflects "
+                        "the analyst's edits", synced,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "JSONB sync skipped for %s: %s — extracted_rows is up to "
+                    "date but the live UI may not reflect edits until next "
+                    "extraction or merge", upload_id, e,
+                )
+
         # Snapshot the new state as the next version (Apr 29 customer ask).
         # Done in an independent session AFTER the corrections commit — sharing
         # the route's session triggers greenlet errors when we touch
