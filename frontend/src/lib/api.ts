@@ -9,13 +9,24 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
   return res.json();
 }
 
-// Upload files and get classification
+// Upload files and get classification.
+//
+// As of Apr-30 the response can also carry `match_candidates` — pre-existing
+// projects that share carrier/account with the just-uploaded files. The
+// upload page renders a banner when this list is non-empty, offering the
+// analyst the choice to append to the existing project instead of creating
+// a duplicate. Field is always returned (empty list when no match), so
+// callers can read it unconditionally.
 export async function apiClassify(
   files: File[],
   projectName: string,
   clientName: string,
   description: string,
-): Promise<{ upload_id: string; files: ClassifiedFileResponse[] }> {
+): Promise<{
+  upload_id: string;
+  files: ClassifiedFileResponse[];
+  match_candidates?: MatchCandidate[];
+}> {
   const form = new FormData();
   files.forEach((f) => form.append("files", f));
   form.append("project_name", projectName);
@@ -27,6 +38,29 @@ export async function apiClassify(
     body: form,
   });
   if (!res.ok) throw new Error(`Classify failed: ${res.status}`);
+  return res.json();
+}
+
+// Append new files to an existing upload — iterative inventory updates.
+// The backend classifies them inline, returns the classification list, then
+// runs extraction in the background and merges new rows by account/phone/
+// circuit keys. Frontend should poll status on the target upload_id after
+// this call (same poll loop as /extract).
+export async function apiAppend(
+  targetUploadId: string,
+  files: File[],
+): Promise<{
+  upload_id: string;
+  status: string;
+  appended: ClassifiedFileResponse[];
+}> {
+  const form = new FormData();
+  files.forEach((f) => form.append("files", f));
+  const res = await fetch(`${API_BASE}/api/uploads/${targetUploadId}/append`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) throw new Error(`Append failed: ${res.status} ${await res.text()}`);
   return res.json();
 }
 
@@ -382,6 +416,26 @@ export interface ClassifiedFileResponse {
   doc_type: string | null;
   format_variant: string | null;
   file_size: number;
+  // Apr-30 — surfaced from backend so we can show the detected account
+  // number alongside the carrier in the review screen, and so the auto-
+  // match banner can explain *why* a candidate matched.
+  account_number?: string | null;
+}
+
+// A pre-existing project that looks like the same one being uploaded.
+// Surfaced by the backend on the /classify response when (carrier,account)
+// overlap is high enough; the upload page renders a banner if any candidate
+// is present, offering "Append to existing" or "Create new project".
+export interface MatchCandidate {
+  upload_id: string;
+  project_name: string;
+  client_name: string | null;
+  files_total: number;
+  total_rows: number;
+  created_at: string | null;
+  age_days: number | null;
+  score: number;
+  match_reason: string;
 }
 
 export interface ExtractedRowAPI {

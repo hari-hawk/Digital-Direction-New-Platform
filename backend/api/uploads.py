@@ -360,11 +360,39 @@ class ClassifiedFile(BaseModel):
     doc_type: Optional[str]
     format_variant: Optional[str]
     file_size: int
+    # Apr-30 — surfaced from the classifier so the auto-match step can score
+    # candidate projects by (carrier, account_number) overlap. Already
+    # extracted internally during classify_by_filename / classify_by_content;
+    # we just weren't returning it. None when no account is detectable.
+    account_number: Optional[str] = None
+
+
+class MatchCandidate(BaseModel):
+    """A pre-existing upload that looks like the same project as the one being
+    classified — surfaced on the Upload page so the analyst can append to the
+    existing project instead of creating a duplicate. Multiple candidates may
+    be returned (top 3); the UI shows the highest-scoring one prominently."""
+    upload_id: str
+    project_name: str
+    client_name: Optional[str] = None
+    files_total: int
+    total_rows: int
+    created_at: Optional[str] = None
+    age_days: Optional[int] = None
+    score: int
+    # Human-readable explanation of what triggered the match — shown in the
+    # banner so the analyst trusts the suggestion ("Same Comcast account
+    # 8495..., uploaded 2 days ago"). Stays string-typed so the frontend
+    # doesn't have to reconstruct it from a structured shape.
+    match_reason: str
 
 
 class ClassifyResponse(BaseModel):
     upload_id: str
     files: list[ClassifiedFile]
+    # Empty list when nothing matched — the common case for first-time
+    # uploads. Frontend renders the banner only when this is non-empty.
+    match_candidates: list[MatchCandidate] = []
 
 
 class ExtractRequest(BaseModel):
@@ -523,6 +551,10 @@ async def classify_upload(
             carrier_key = stage_b.carrier or stage_a.carrier
             doc_type = stage_b.document_type or stage_a.document_type
             format_variant = stage_b.format_variant
+            # Surface the account number the classifier already extracts so
+            # the auto-match step downstream can score (carrier, account)
+            # overlap against existing projects.
+            account_number = stage_b.account_number or stage_a.account_number
 
             # Stage C: LLM fallback when A and B couldn't name a carrier.
             # The LLM is open-ended — it returns the actual carrier printed on the doc.
@@ -533,6 +565,7 @@ async def classify_upload(
                         stage_c = await classify_by_llm(local_str, text)
                         carrier_key = stage_c.carrier or carrier_key
                         doc_type = doc_type or stage_c.document_type
+                        account_number = account_number or stage_c.account_number
                 except Exception as e:
                     logger.warning(f"LLM classify failed for {safe_name}: {e}")
 
@@ -552,6 +585,7 @@ async def classify_upload(
             doc_type=doc_type,
             format_variant=format_variant,
             file_size=fsize,
+            account_number=account_number,
         )
 
     classified = await asyncio.gather(*[
@@ -587,7 +621,163 @@ async def classify_upload(
         "results": [],
     })
 
-    return ClassifyResponse(upload_id=upload_id, files=classified)
+    # ── Auto-match candidates (Apr-30) ──
+    # Look for existing uploads that share at least one (carrier, account)
+    # tuple with what we just classified. If found, the UI surfaces a banner
+    # asking "Append to {project} or create new?". The new upload_id we just
+    # created above stays valid either way — if the analyst picks "append",
+    # the frontend calls /append on the target upload (uploading the same
+    # files in one round trip) and this newly-created upload remains as a
+    # short-lived "classified" stub the analyst can purge or ignore.
+    try:
+        match_candidates = await _find_match_candidates(
+            classified, current_upload_id=upload_id, client_name=client_name,
+        )
+    except Exception as e:
+        logger.warning(f"Match-candidate lookup skipped: {e}")
+        match_candidates = []
+
+    return ClassifyResponse(
+        upload_id=upload_id, files=classified, match_candidates=match_candidates,
+    )
+
+
+async def _find_match_candidates(
+    classified: list[ClassifiedFile],
+    current_upload_id: str,
+    client_name: str | None = None,
+    *,
+    max_results: int = 3,
+    min_score: int = 20,
+    look_back_days: int = 90,
+) -> list[MatchCandidate]:
+    """Score existing uploads against the just-classified file batch.
+
+    Returns the top `max_results` candidates above `min_score`, newest-first
+    on ties. Empty list when nothing scores high enough — which is the
+    common case for first-time uploads.
+
+    Scoring (intentionally simple; tune as needed):
+        +20  per file with both (carrier, account_number) matching the candidate
+        +5   per file matching only on carrier (no usable account)
+        +10  if client_name matches (case-insensitive)
+        +5   if candidate is <14 days old, +3 if <30, +1 if <90
+    """
+    import re as _re
+    from datetime import datetime, timezone, timedelta
+
+    def _norm_acct(s: str | None) -> str:
+        if not s:
+            return ""
+        d = _re.sub(r"\D", "", s)
+        return d or s.strip().lower()
+
+    # Build the new-upload signature: set of (carrier_lower, normalized_account)
+    new_pairs: set[tuple[str, str]] = set()
+    new_carriers_only: set[str] = set()
+    for cf in classified:
+        if not cf.carrier:
+            continue
+        c = cf.carrier.lower()
+        a = _norm_acct(cf.account_number)
+        if a:
+            new_pairs.add((c, a))
+        else:
+            new_carriers_only.add(c)
+
+    # Nothing identifiable to match on → return empty
+    if not new_pairs and not new_carriers_only:
+        return []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=look_back_days)
+    uploads = await _list_uploads(include_deleted=False)
+
+    candidates: list[MatchCandidate] = []
+    cn_lower = (client_name or "").strip().lower()
+
+    for u in uploads:
+        if u.get("upload_id") == current_upload_id:
+            continue  # never match against ourselves
+        if u.get("status") != "done":
+            continue  # only completed projects are sensible append targets
+        # Skip ancient uploads — recency boosts the signal-to-noise of
+        # follow-up suggestions.
+        created = u.get("created_at")
+        try:
+            created_dt = datetime.fromisoformat(created.replace("Z", "+00:00")) if isinstance(created, str) else None
+        except Exception:
+            created_dt = None
+        if created_dt and created_dt < cutoff:
+            continue
+
+        cls = u.get("classified") or u.get("file_assignments") or []
+        cand_pairs: set[tuple[str, str]] = set()
+        cand_carriers: set[str] = set()
+        for f in cls:
+            c = (f.get("carrier") or "").lower() if isinstance(f, dict) else ""
+            if not c:
+                continue
+            a = _norm_acct(f.get("account_number") if isinstance(f, dict) else None)
+            cand_carriers.add(c)
+            if a:
+                cand_pairs.add((c, a))
+
+        # Score
+        score = 0
+        full_overlap = new_pairs & cand_pairs
+        carrier_only_overlap = (new_carriers_only & cand_carriers) | (
+            {c for (c, _a) in new_pairs} & cand_carriers - {c for (c, _a) in full_overlap}
+        )
+        score += 20 * len(full_overlap)
+        score += 5 * len(carrier_only_overlap)
+        if cn_lower and (u.get("client_name") or "").strip().lower() == cn_lower:
+            score += 10
+
+        # Recency
+        age_days: int | None = None
+        if created_dt:
+            age_days = max(0, (datetime.now(timezone.utc) - created_dt).days)
+            if age_days < 14:
+                score += 5
+            elif age_days < 30:
+                score += 3
+            elif age_days < 90:
+                score += 1
+
+        if score < min_score:
+            continue
+
+        # Build a one-line reason the analyst can trust
+        reasons: list[str] = []
+        if full_overlap:
+            sample_acct = sorted(full_overlap)[0][1]
+            reasons.append(f"shares carrier+account ({sample_acct[:10]}…)" if len(sample_acct) > 10
+                           else f"shares carrier+account ({sample_acct})")
+        elif carrier_only_overlap:
+            sample = sorted(carrier_only_overlap)[0]
+            reasons.append(f"same carrier ({sample.title()})")
+        if cn_lower and (u.get("client_name") or "").strip().lower() == cn_lower:
+            reasons.append(f"same client ({u.get('client_name')})")
+        if age_days is not None:
+            reasons.append(f"{age_days}d old")
+
+        candidates.append(MatchCandidate(
+            upload_id=u.get("upload_id", ""),
+            project_name=u.get("project_name") or "(unnamed)",
+            client_name=u.get("client_name") or None,
+            files_total=int(u.get("files_total") or 0),
+            total_rows=int(u.get("total_rows") or 0),
+            created_at=created if isinstance(created, str) else None,
+            age_days=age_days,
+            score=score,
+            match_reason=" · ".join(reasons) or "carrier overlap",
+        ))
+
+    # Sort: highest score first, then most-recent (smallest age_days) on ties.
+    candidates.sort(
+        key=lambda c: (-c.score, c.age_days if c.age_days is not None else 99999)
+    )
+    return candidates[:max_results]
 
 
 # ============================================

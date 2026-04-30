@@ -16,8 +16,8 @@ import { useAppStore, type ExtractedRow, type Upload } from "@/lib/store";
 import {
   apiClassify, apiExtract, apiGetStatus, apiGetResults,
   apiCancelExtraction, apiRetryExtraction, apiListCarriers, apiDownloadFiles,
-  apiDeleteUpload, apiCleanupOrphaned,
-  type ExtractedRowAPI,
+  apiDeleteUpload, apiCleanupOrphaned, apiAppend,
+  type ExtractedRowAPI, type MatchCandidate,
 } from "@/lib/api";
 import { MoveRight } from "lucide-react";
 
@@ -60,6 +60,18 @@ export function UploadPage({ onViewResults }: UploadPageProps) {
   const [extracting, setExtracting] = useState(false);
   const [progress, setProgress] = useState(0);
   const pollingRef = useRef(false);
+  // Apr-30: auto-match candidates surfaced by /classify so the analyst can
+  // append to an existing project instead of duplicating it. Stored as
+  // local state (not in zustand) because they're scoped to a single
+  // classify→review cycle and don't need to survive page navigation.
+  const [matchCandidates, setMatchCandidates] = useState<MatchCandidate[]>([]);
+  // Cache the original File[] objects from this classify cycle so the
+  // "Append to existing" button can re-upload them via /append without
+  // forcing the analyst to drag-and-drop a second time. Keyed by the
+  // upload_id returned from /classify so we can clean up when the user
+  // moves on or starts another classification.
+  const [pendingFilesById, setPendingFilesById] = useState<Record<string, File[]>>({});
+  const [appendingToExisting, setAppendingToExisting] = useState(false);
 
   // Fetch configured carriers from backend on mount
   useEffect(() => {
@@ -145,13 +157,67 @@ export function UploadPage({ onViewResults }: UploadPageProps) {
       const carriers = [...new Set(result.files.map((f) => f.carrier || "Unknown"))] as string[];
       setSelectedCarriers(new Set(carriers));
       store.clearDraftFields();
-      toast.success(`${files.length} files classified by backend`);
+      // Surface match candidates so the banner can render in the review UI.
+      // Empty list when nothing matched — the common case.
+      setMatchCandidates(result.match_candidates || []);
+      // Cache the raw File[] so "Append to existing" can re-upload them
+      // without dragging again. Keyed by the new upload_id so we can drop
+      // the entry when this classify cycle ends.
+      setPendingFilesById((prev) => ({ ...prev, [result.upload_id]: files }));
+      const matchCount = (result.match_candidates || []).length;
+      if (matchCount > 0) {
+        toast.success(
+          `${files.length} files classified — found ${matchCount} similar project${matchCount > 1 ? "s" : ""}`,
+        );
+      } else {
+        toast.success(`${files.length} files classified by backend`);
+      }
     } catch (err) {
       toast.error(`Classification failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
       setClassifying(false);
     }
   }, [clientName, projectName, description, store, configuredCarriers, canUpload]);
+
+  // "Append to existing" — re-uploads the just-classified files to the
+  // matched project's /append endpoint, then navigates to that project.
+  // The throwaway upload created by /classify stays around as a "classified"
+  // stub; the analyst can purge it from the bin if they care.
+  const handleAppendToExisting = useCallback(async (target: MatchCandidate) => {
+    if (!upload) return;
+    const cached = pendingFilesById[upload.id];
+    if (!cached || cached.length === 0) {
+      toast.error("Original files no longer in memory — please re-drop them");
+      return;
+    }
+    setAppendingToExisting(true);
+    try {
+      await apiAppend(target.upload_id, cached);
+      toast.success(`Appending ${cached.length} file(s) to "${target.project_name}"…`);
+      // Drop the throwaway classify upload from the active view, then
+      // navigate to the target. The Upload page's status poll will pick
+      // up the target's "extracting" → "done" transition.
+      try {
+        await apiDeleteUpload(upload.id);
+      } catch (e) {
+        // Soft-delete failure isn't fatal — the stub upload is harmless.
+        console.warn("Failed to soft-delete stub upload:", e);
+      }
+      // Free the cached File handles for the stub upload
+      setPendingFilesById((prev) => {
+        const { [upload.id]: _drop, ...rest } = prev;
+        return rest;
+      });
+      setMatchCandidates([]);
+      // Navigate the user to the target project so they see the merge
+      // happen live. setActiveUpload handles loading state from the API.
+      store.setActiveUpload(target.upload_id);
+    } catch (err) {
+      toast.error(`Append failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } finally {
+      setAppendingToExisting(false);
+    }
+  }, [upload, pendingFilesById, store]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -721,6 +787,60 @@ export function UploadPage({ onViewResults }: UploadPageProps) {
           </Button>
         </div>
       </div>
+
+      {/* Auto-match banner: when /classify finds a likely follow-up to an
+          existing project, surface the top candidate so the analyst can
+          append rather than duplicate. Only renders during the
+          "selecting" review step (before extraction starts). */}
+      {upload.status === "selecting" && matchCandidates.length > 0 && (
+        <Card className="p-4 bg-blue-500/5 border-blue-500/30">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-3 flex-1">
+              <div className="mt-0.5 rounded-full bg-blue-500/10 p-1.5">
+                <FolderOpen className="w-4 h-4 text-blue-400" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium">
+                  Looks like a follow-up to{" "}
+                  <span className="font-semibold">{matchCandidates[0].project_name}</span>
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {matchCandidates[0].match_reason}
+                  {matchCandidates[0].files_total > 0 && ` · ${matchCandidates[0].files_total} files`}
+                  {matchCandidates[0].total_rows > 0 && ` · ${matchCandidates[0].total_rows} rows`}
+                </p>
+                {matchCandidates.length > 1 && (
+                  <p className="text-xs text-muted-foreground/70 mt-1">
+                    +{matchCandidates.length - 1} other match{matchCandidates.length > 2 ? "es" : ""}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setMatchCandidates([])}
+                disabled={appendingToExisting}
+              >
+                Create new
+              </Button>
+              <Button
+                size="sm"
+                className="bg-blue-600 hover:bg-blue-500 text-white"
+                onClick={() => handleAppendToExisting(matchCandidates[0])}
+                disabled={appendingToExisting}
+              >
+                {appendingToExisting ? (
+                  <><Loader2 className="w-4 h-4 mr-1 animate-spin" />Appending…</>
+                ) : (
+                  <><MoveRight className="w-4 h-4 mr-1" />Append to existing</>
+                )}
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Extraction progress with Stop button */}
       {extracting && (
