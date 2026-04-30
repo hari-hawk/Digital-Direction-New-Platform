@@ -627,6 +627,34 @@ def _propagate_account_fields(
     """
     acct_config = merge_rules.account_normalization
 
+    # ── Cross-document account inference (Apr-30) ──
+    # Mirrors `_propagate_account_level_fields_in_dicts` in uploads.py.
+    # When the project has exactly ONE distinct non-null account and some
+    # rows have a blank account (e.g. a contract PDF that doesn't reprint
+    # the account number), fill the blank rows with that single account.
+    # Strict guard: only fires for one-account projects, so multi-account
+    # projects keep relying on account-prefix-bridge / scoped-contract
+    # propagation. Without this fill the contract rows ended up in a
+    # separate "" account group and missed currency / billing_name flow.
+    distinct_accts: set[str] = set()
+    for row in rows:
+        a = (row.carrier_account_number or "").strip()
+        if a:
+            distinct_accts.add(a)
+    if len(distinct_accts) == 1:
+        only_acct = next(iter(distinct_accts))
+        inferred = 0
+        for row in rows:
+            if not (row.carrier_account_number or "").strip():
+                row.carrier_account_number = only_acct
+                inferred += 1
+        if inferred:
+            logger.info(
+                "Cross-doc account inference (merger): filled %d row(s) "
+                "with sole project account %r",
+                inferred, only_acct,
+            )
+
     # Group by normalized account
     acct_groups: dict[str, list[ExtractedRow]] = defaultdict(list)
     for row in rows:

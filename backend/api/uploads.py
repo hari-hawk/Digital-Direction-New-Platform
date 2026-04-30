@@ -73,6 +73,35 @@ def _propagate_account_level_fields_in_dicts(rows: list[dict]) -> None:
     from collections import defaultdict
     import re as _re_local
 
+    # ── Cross-document account inference (Apr-30) ──
+    # When a project has exactly ONE distinct non-null account and some rows
+    # have a blank account, fill the blank rows with that single account.
+    # This handles the "contract document has no account number, invoice
+    # does" case so they end up in the same propagation group below — which
+    # then carries currency / billing_name / address / etc. from the invoice
+    # rows onto the contract rows. Strict guard: only fires when there's
+    # exactly one distinct account, so we never guess wrong on multi-account
+    # projects (those already correlate via account-prefix-bridge).
+    distinct_accts = {
+        (r.get("carrier_account_number") or "").strip()
+        for r in rows
+        if (r.get("carrier_account_number") or "").strip()
+    }
+    if len(distinct_accts) == 1:
+        only_acct = next(iter(distinct_accts))
+        inferred = 0
+        for r in rows:
+            cur = (r.get("carrier_account_number") or "").strip()
+            if not cur:
+                r["carrier_account_number"] = only_acct
+                inferred += 1
+        if inferred:
+            logger.info(
+                "Cross-doc account inference: filled %d row(s) with sole "
+                "project account %r so account-level fields propagate",
+                inferred, only_acct,
+            )
+
     # Normalize the account-number key: strip non-digits so format differences
     # (614-718-4339 vs 6147184339152) collapse onto the same digit string,
     # which lets the prefix-bridge below merge contract-form keys into the
