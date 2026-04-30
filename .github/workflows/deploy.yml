@@ -59,6 +59,7 @@ jobs:
                 done
 
                 echo "==> Building frontend..."
+                export PATH="$PATH:/root/.bun/bin"
                 cd frontend
                 bun install --frozen-lockfile
                 NEXT_PUBLIC_API_URL=https://dg-api.techjays.com bun run build
