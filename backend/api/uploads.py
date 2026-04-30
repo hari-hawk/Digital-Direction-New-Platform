@@ -561,6 +561,177 @@ async def classify_upload(
     return ClassifyResponse(upload_id=upload_id, files=classified)
 
 
+# ============================================
+# Bulk classify across carriers (Matt's Q2)
+#
+# Customer mental model: the analyst drops a folder of mixed-carrier docs
+# (a Frontier invoice + an AT&T contract + a Lumen CSR + a Comcast renewal,
+# for example) and the platform sorts them into separate per-carrier
+# projects automatically — instead of forcing the analyst to pre-split.
+#
+# Flow:
+#   1. Save every uploaded file to a single staging area.
+#   2. Classify each file (filename → content → LLM cascade).
+#   3. Group files by their detected carrier (configurable via `split_by`).
+#   4. Create one upload per group, naming it "{base} — {carrier}".
+#   5. Return the per-group upload_ids so the UI can navigate the analyst
+#      to each one (or kick off extraction in parallel).
+# ============================================
+
+
+class BulkClassifyGroup(BaseModel):
+    upload_id: str
+    carrier: str | None
+    project_name: str
+    file_count: int
+    files: list[ClassifiedFile]
+
+
+class BulkClassifyResponse(BaseModel):
+    groups: list[BulkClassifyGroup]
+    unclassified: list[ClassifiedFile] = []
+
+
+@router.post("/classify-bulk", response_model=BulkClassifyResponse)
+async def classify_bulk(
+    files: list[UploadFile] = File(...),
+    project_name: str = Form(""),
+    client_name: str = Form(""),
+    description: str = Form(""),
+    split_by: str = Form("carrier"),
+):
+    """Classify a mixed batch and split into one upload per carrier (or
+    per doc_type). Matt's Q2 — analyst no longer has to pre-sort folders.
+
+    `split_by` accepts:
+      - "carrier" (default): group by detected carrier
+      - "doc_type": group by doc_type (invoice / csr / contract / report / …)
+
+    Files whose carrier (or doc_type) couldn't be determined are returned
+    in the `unclassified` list — the analyst can hand-classify them via
+    the regular `/classify` endpoint.
+    """
+    if split_by not in ("carrier", "doc_type"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "split_by must be 'carrier' or 'doc_type'"},
+        )
+
+    logger.info(f"Bulk classify: {len(files)} files, split_by={split_by}, project={project_name}")
+
+    storage = get_storage()
+    # Stage all files under a transient bulk_id so we can move them into
+    # per-group upload prefixes once we know the grouping.
+    bulk_id = str(uuid.uuid4())[:8]
+    staged: list[tuple[str, bytes, int]] = []  # (safe_name, content, size)
+    for f in files:
+        safe_name = Path(f.filename).name
+        if not safe_name:
+            continue
+        content = await f.read()
+        staged.append((safe_name, content, len(content)))
+
+    if not staged:
+        return JSONResponse(status_code=400, content={"error": "No usable files in request"})
+
+    # Classify each staged file in parallel. We classify against a temporary
+    # path inside the bulk_id staging area so open_local works for GCS too.
+    from backend.pipeline.classifier import classify_by_llm, extract_first_pages_text
+
+    async def _classify_one(safe_name: str, content: bytes, fsize: int):
+        # Save to bulk staging path so we can pass a real local handle to
+        # the content-stage classifier.
+        staging_path = storage.save(content, f"temp/_bulk_{bulk_id}/{safe_name}")
+        with storage.open_local(staging_path) as local_path:
+            local_str = str(local_path)
+            stage_a = classify_by_filename(safe_name)
+            stage_b = await asyncio.to_thread(classify_by_content, local_str)
+            carrier_key = stage_b.carrier or stage_a.carrier
+            doc_type = stage_b.document_type or stage_a.document_type
+            format_variant = stage_b.format_variant
+            if not carrier_key:
+                try:
+                    text = await asyncio.to_thread(extract_first_pages_text, local_str)
+                    if text:
+                        stage_c = await classify_by_llm(local_str, text)
+                        carrier_key = stage_c.carrier or carrier_key
+                        doc_type = doc_type or stage_c.document_type
+                except Exception as e:
+                    logger.warning(f"Bulk classify LLM failed for {safe_name}: {e}")
+        store = get_config_store()
+        cfg = store.get_carrier(carrier_key) if carrier_key else None
+        display = cfg.name if cfg else (carrier_key.title() if carrier_key else None)
+        return safe_name, content, fsize, ClassifiedFile(
+            filename=safe_name, carrier=display,
+            doc_type=doc_type, format_variant=format_variant, file_size=fsize,
+        )
+
+    classified_results = await asyncio.gather(*[
+        _classify_one(name, content, size) for name, content, size in staged
+    ])
+
+    # Group by the chosen split_by axis. None bucket → "unclassified" return.
+    groups: dict[str, list[tuple[str, bytes, int, ClassifiedFile]]] = {}
+    unclassified: list[ClassifiedFile] = []
+    for safe_name, content, size, cf in classified_results:
+        bucket = cf.carrier if split_by == "carrier" else cf.doc_type
+        if not bucket:
+            unclassified.append(cf)
+            continue
+        groups.setdefault(bucket, []).append((safe_name, content, size, cf))
+
+    # Resolve client_id once for all groups (each group reuses it).
+    client_id: str | None = None
+    if client_name and client_name.strip():
+        try:
+            from backend.api.clients import find_or_create_client
+            async with async_session() as session:
+                async with session.begin():
+                    client = await find_or_create_client(client_name, session)
+                    if client:
+                        client_id = str(client.id)
+        except Exception as e:
+            logger.warning(f"Bulk: client find-or-create failed for {client_name!r}: {e}")
+
+    # Create one upload per group. Files are saved under their group's
+    # upload_id prefix so each upload is self-contained on disk.
+    from datetime import datetime, timezone
+    output_groups: list[BulkClassifyGroup] = []
+    base = (project_name or "Bulk import").strip() or "Bulk import"
+    for bucket, items in groups.items():
+        upload_id = str(uuid.uuid4())[:8]
+        saved_files: dict[str, str] = {}
+        classified_dicts: list[dict] = []
+        for safe_name, content, size, cf in items:
+            sp = storage.save(content, f"temp/{upload_id}/{safe_name}")
+            saved_files[safe_name] = sp
+            classified_dicts.append(cf.model_dump())
+        group_project_name = f"{base} — {bucket}"
+        await _save_upload(upload_id, {
+            "project_name": group_project_name,
+            "client_name": client_name,
+            "client_id": client_id,
+            "description": description,
+            "files": saved_files,
+            "classified": classified_dicts,
+            "status": "classified",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "results": [],
+        })
+        output_groups.append(BulkClassifyGroup(
+            upload_id=upload_id,
+            carrier=bucket if split_by == "carrier" else None,
+            project_name=group_project_name,
+            file_count=len(items),
+            files=[cf for _, _, _, cf in items],
+        ))
+        logger.info(
+            f"Bulk: created upload {upload_id} for {split_by}={bucket} ({len(items)} files)"
+        )
+
+    return BulkClassifyResponse(groups=output_groups, unclassified=unclassified)
+
+
 @router.post("/extract")
 async def extract_upload(request: ExtractRequest, background_tasks: BackgroundTasks):
     """Start extraction for selected files with user's carrier assignments."""
@@ -793,6 +964,397 @@ async def retry_extraction(upload_id: str, background_tasks: BackgroundTasks):
     await _update_upload_results(upload_id, [])
     background_tasks.add_task(_run_extraction, upload_id, file_assignments)
     return {"upload_id": upload_id, "status": "extracting"}
+
+
+# ============================================
+# Append flow (Matt's Q1 — iterative weeks-later updates)
+#
+# Customer mental model: weeks after the initial upload, the analyst gets a
+# follow-up file from a carrier (a renewal email, a partial Excel update,
+# a new CSR for a moved location). They want to drop it into the existing
+# project so the inventory updates in place — without re-extracting the
+# original files or losing prior analyst edits.
+#
+# Pipeline:
+#   1. Save the new files alongside the existing upload's files in storage.
+#   2. Classify each new file (filename → content → LLM cascade).
+#   3. Persist classification onto file_assignments (existing assignments
+#      are preserved so the upload's audit trail keeps every file).
+#   4. Background-extract just the NEW files and merge their rows into the
+#      existing results JSONB. New rows that share a key (account_number /
+#      sub_account / phone_number / circuit_id) are field-merged so the
+#      latest doc fills blanks and overrides stale values; rows with no
+#      key match append as new inventory entries.
+#   5. Snapshot the merged result as a new inventory version
+#      (source="append") so the analyst can roll back if the follow-up
+#      doc was wrong.
+# ============================================
+
+
+# Keys used by the append-merge to identify whether a new row already
+# exists in the upload's inventory. Tried in order; first hit wins. Mirrors
+# the merger's correlation strategy (account → sub_account → phone → circuit)
+# so append behaves consistently with the explicit cross-doc merger.
+_APPEND_MATCH_KEYS = (
+    "carrier_circuit_number",
+    "phone_number",
+    "sub_account_number",
+    "carrier_account_number",
+)
+
+
+# Fields that the merger considers "owned" by the new (incoming) row when
+# both rows have a value. Everything else stays put unless the existing
+# value is blank. Picks fields that genuinely change over time (term,
+# pricing, contract dates) vs. identity fields that should stay stable.
+_APPEND_OVERRIDE_FIELDS = frozenset({
+    "rate", "mrc", "contract_term_months",
+    "contract_begin_date", "contract_expiration_date",
+    "currently_month_to_month", "mtm_or_less_than_year",
+    "auto_renew", "auto_renewal_notes",
+    "contract_number", "contract_number_2",
+    "billing_per_contract", "contract_info_received",
+    "service_address_1", "service_address_2",
+    "city", "state", "zip", "country",
+    "billing_name", "status", "notes",
+})
+
+
+def _row_key(row: dict, field: str) -> str | None:
+    val = row.get(field)
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s or s.lower() in ("none", "null", "n/a"):
+        return None
+    # Phone & account numbers — strip non-digits so format variations don't
+    # block a match (e.g., "614-733-0580" ↔ "6147330580").
+    if field in ("phone_number", "carrier_account_number", "sub_account_number"):
+        import re as _re
+        digits = _re.sub(r"\D", "", s)
+        return digits or s.lower()
+    return s.lower()
+
+
+def _merge_appended_row(existing: dict, incoming: dict) -> int:
+    """Fold `incoming` into `existing` in place. Returns count of fields
+    actually changed (used for logging)."""
+    changes = 0
+    for k, v in incoming.items():
+        if k in ("id", "extraction_order", "field_confidence",
+                 "validation_issues", "validation_valid", "compliance_flags"):
+            continue
+        if v is None:
+            continue
+        if isinstance(v, str) and not v.strip():
+            continue
+        cur = existing.get(k)
+        # Override-eligible field, OR existing is blank → take new value
+        cur_blank = cur is None or (isinstance(cur, str) and not cur.strip())
+        if cur_blank or k in _APPEND_OVERRIDE_FIELDS:
+            if cur != v:
+                existing[k] = v
+                changes += 1
+    # Append source_file trail so analysts see which docs contributed.
+    new_src = incoming.get("source_file")
+    if new_src:
+        prior = existing.get("files_used") or []
+        if isinstance(prior, list) and new_src not in prior:
+            prior = list(prior) + [new_src]
+            existing["files_used"] = prior
+    return changes
+
+
+@router.post("/{upload_id}/append")
+async def append_to_upload(
+    upload_id: str,
+    background_tasks: BackgroundTasks,
+    files: list[UploadFile] = File(...),
+):
+    """Append new files to an existing upload — iterative inventory updates
+    (Matt's Q1).
+
+    The new files are classified inline (so the response carries the
+    classification for the UI), then extraction runs in the background and
+    merges new rows into the existing upload's inventory. Existing rows
+    sharing a key (account/phone/circuit) are field-merged; brand-new rows
+    are appended.
+
+    Returns: {"upload_id", "status", "appended": [ClassifiedFile, …]}
+    """
+    upload = await _get_upload(upload_id)
+    if not upload:
+        return JSONResponse(status_code=404, content={"error": "Upload not found"})
+    if upload["status"] in ("extracting", "classifying", "cancel_requested"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Upload is busy (status={upload['status']}). Try again when it's done."},
+        )
+
+    storage = get_storage()
+    saved_files: dict[str, str] = dict(upload.get("files") or {})
+    new_file_data: list[tuple[str, str, int]] = []
+
+    for file in files:
+        safe_name = Path(file.filename).name
+        if not safe_name:
+            continue
+        # If a filename collides with an existing file, namespace it so
+        # the older version stays addressable. Append flow shouldn't ever
+        # silently overwrite a prior file.
+        target_name = safe_name
+        if target_name in saved_files:
+            from datetime import datetime as _dt
+            stamp = _dt.utcnow().strftime("%Y%m%d_%H%M%S")
+            stem = Path(target_name).stem
+            suffix = Path(target_name).suffix
+            target_name = f"{stem}__append_{stamp}{suffix}"
+        content = await file.read()
+        storage_path = storage.save(content, f"temp/{upload_id}/{target_name}")
+        saved_files[target_name] = storage_path
+        new_file_data.append((target_name, storage_path, len(content)))
+
+    if not new_file_data:
+        return JSONResponse(status_code=400, content={"error": "No usable files in request"})
+
+    # Classify each new file (reuse classify_upload's inner machinery).
+    from backend.pipeline.classifier import classify_by_llm, extract_first_pages_text
+
+    async def _classify_one(safe_name: str, sp: str, fsize: int) -> ClassifiedFile:
+        with storage.open_local(sp) as local_path:
+            local_str = str(local_path)
+            stage_a = classify_by_filename(safe_name)
+            stage_b = await asyncio.to_thread(classify_by_content, local_str)
+            carrier_key = stage_b.carrier or stage_a.carrier
+            doc_type = stage_b.document_type or stage_a.document_type
+            format_variant = stage_b.format_variant
+            if not carrier_key:
+                try:
+                    text = await asyncio.to_thread(extract_first_pages_text, local_str)
+                    if text:
+                        stage_c = await classify_by_llm(local_str, text)
+                        carrier_key = stage_c.carrier or carrier_key
+                        doc_type = doc_type or stage_c.document_type
+                except Exception as e:
+                    logger.warning(f"Append classify LLM failed for {safe_name}: {e}")
+
+        store = get_config_store()
+        cfg = store.get_carrier(carrier_key) if carrier_key else None
+        display = cfg.name if cfg else (carrier_key.title() if carrier_key else None)
+        return ClassifiedFile(
+            filename=safe_name, carrier=display,
+            doc_type=doc_type, format_variant=format_variant, file_size=fsize,
+        )
+
+    new_classified = await asyncio.gather(*[
+        _classify_one(name, path, size) for name, path, size in new_file_data
+    ])
+
+    # Persist updated files map + extended classified list. We keep prior
+    # classified entries so the upload card still shows every file ever
+    # added; new ones append to the tail.
+    prior_classified = list(upload.get("classified") or [])
+    new_classified_dicts = [c.model_dump() for c in new_classified]
+    await _update_upload_field(
+        upload_id,
+        files=saved_files,
+        classified=prior_classified + new_classified_dicts,
+        status="extracting",
+    )
+
+    background_tasks.add_task(_run_append_extraction, upload_id, new_classified_dicts)
+    return {
+        "upload_id": upload_id,
+        "status": "extracting",
+        "appended": new_classified_dicts,
+    }
+
+
+async def _run_append_extraction(upload_id: str, new_assignments: list[dict]):
+    """Background task: extract just the new files, merge into existing rows,
+    snapshot the result as a new inventory version. Doesn't touch the
+    original v0 snapshot — analysts can always revert to first extraction.
+    """
+    try:
+        upload = await _get_upload(upload_id)
+        if not upload:
+            logger.error(f"Append: upload {upload_id} not found")
+            return
+
+        existing_rows = list(upload.get("results") or [])
+        saved_files = upload.get("files") or {}
+
+        # Load correction hints (same loop as _run_extraction). Keeps
+        # iterative updates benefiting from analyst edits made on prior runs.
+        correction_hints_by_carrier: dict[str, list] = {}
+        try:
+            from backend.services.feedback import get_relevant_corrections
+            for a in new_assignments:
+                cd = a.get("carrier")
+                if not cd:
+                    continue
+                ckey = _carrier_display_to_key(cd) or cd
+                hints = get_relevant_corrections(ckey) or get_relevant_corrections(cd)
+                if hints:
+                    correction_hints_by_carrier[ckey] = hints
+                    correction_hints_by_carrier[cd] = hints
+        except Exception as e:
+            logger.debug(f"Append: correction hint loading skipped: {e}")
+
+        new_rows: list[dict] = []
+        files_processed_now = 0
+        extraction_errors = list(upload.get("extraction_errors") or [])
+
+        for assignment in new_assignments:
+            filename = assignment["filename"]
+            carrier_display = assignment.get("carrier")
+            carrier_key = _carrier_display_to_key(carrier_display) or "unknown"
+            storage_path = saved_files.get(filename)
+            if not storage_path:
+                continue
+            try:
+                logger.info(f"Append-extracting: {filename} (carrier={carrier_key})")
+                storage = get_storage()
+                with storage.open_local(storage_path) as local_path:
+                    parsed = parse_document(str(local_path), carrier_key, assignment.get("doc_type", "invoice"))
+                if not parsed.sections:
+                    extraction_errors.append({
+                        "filename": filename, "carrier": carrier_display,
+                        "reason": "Append: parser produced no sections.",
+                    })
+                    continue
+                file_errors: list[str] = []
+                hints = (
+                    correction_hints_by_carrier.get(carrier_key)
+                    or correction_hints_by_carrier.get(carrier_display)
+                )
+                rows, _resp = await extract_document(
+                    parsed, errors_out=file_errors, correction_hints=hints,
+                )
+                if file_errors:
+                    extraction_errors.append({
+                        "filename": filename, "carrier": carrier_display,
+                        "reason": "; ".join(file_errors[:3]),
+                    })
+                # Score + dump
+                confs = score_confidence(rows)
+                from backend.pipeline.validator import validate_rows
+                validation_results = validate_rows(rows)
+                base_idx = len(existing_rows) + len(new_rows)
+                for i, row in enumerate(rows):
+                    rd = row.model_dump(mode="json")
+                    rd["id"] = f"{upload_id}-{filename}-{i}"
+                    rd["source_file"] = filename
+                    rd["carrier"] = carrier_display
+                    rd["extraction_order"] = base_idx + i
+                    fc = {k: (v.value if hasattr(v, 'value') else str(v))
+                          for k, v in confs[i].items()} if i < len(confs) else {}
+                    rd["field_confidence"] = fc
+                    non_missing = [v for v in fc.values() if v != "missing"]
+                    rd["confidence"] = (
+                        Counter(non_missing).most_common(1)[0][0] if non_missing else "medium"
+                    )
+                    v = validation_results[i] if (
+                        i < len(validation_results)
+                        and isinstance(validation_results[i], dict)
+                        and "issues" in validation_results[i]
+                    ) else {"issues": [], "valid": True}
+                    rd["validation_issues"] = v.get("issues", [])
+                    rd["validation_valid"] = v.get("valid", True)
+                    if v.get("issues") and any(it.get("severity") == "error" for it in v["issues"]) and not rd.get("status"):
+                        rd["status"] = "Needs Review"
+                    new_rows.append(rd)
+                files_processed_now += 1
+            except Exception as e:
+                logger.exception(f"Append extraction failed for {filename}: {e}")
+                extraction_errors.append({
+                    "filename": filename, "carrier": carrier_display,
+                    "reason": str(e)[:200],
+                })
+
+        if not new_rows:
+            await _update_upload_field(
+                upload_id, status="done", extraction_errors=extraction_errors,
+            )
+            logger.info(f"Append: no new rows produced for {upload_id}")
+            return
+
+        # ── Smart merge: fold each new row into a matching existing row, or append. ──
+        merged_count = 0
+        appended_count = 0
+        for nr in new_rows:
+            # Find first match by trying keys in priority order
+            matched_existing: dict | None = None
+            for key in _APPEND_MATCH_KEYS:
+                nk = _row_key(nr, key)
+                if not nk:
+                    continue
+                for er in existing_rows:
+                    if _row_key(er, key) == nk:
+                        matched_existing = er
+                        break
+                if matched_existing:
+                    break
+            if matched_existing is not None:
+                changes = _merge_appended_row(matched_existing, nr)
+                if changes:
+                    merged_count += 1
+            else:
+                existing_rows.append(nr)
+                appended_count += 1
+
+        # Re-run propagation + validation/compliance over the merged set so
+        # account-level fields stay consistent and any new row gets flagged.
+        try:
+            _propagate_account_level_fields_in_dicts(existing_rows)
+        except Exception as e:
+            logger.warning(f"Append: propagation skipped: {e}")
+        try:
+            _run_compliance_check_on_dicts(existing_rows)
+        except Exception as e:
+            logger.warning(f"Append: compliance check skipped: {e}")
+
+        # Persist merged rows + bookkeeping fields
+        files_total = (upload.get("files_total") or 0) + len(new_assignments)
+        await _update_upload_field(
+            upload_id,
+            status="done",
+            files_processed=(upload.get("files_processed") or 0) + files_processed_now,
+            files_total=files_total,
+            extraction_errors=extraction_errors,
+        )
+        await _update_upload_results(upload_id, existing_rows)
+
+        # Snapshot v_next with source="append" so the version dropdown shows
+        # this iterative update as its own restorable point.
+        try:
+            from backend.services.inventory_versions import write_snapshot
+            file_list = ", ".join(a["filename"] for a in new_assignments)
+            await write_snapshot(
+                upload_id, existing_rows,
+                source="append",
+                note=(
+                    f"Append: {len(new_assignments)} new file(s) — "
+                    f"{merged_count} row(s) merged, {appended_count} new — [{file_list}]"
+                ),
+            )
+        except Exception as e:
+            logger.warning(f"Append: snapshot write skipped: {e}")
+
+        # Mirror to the typed extracted_rows table so analytics queries see
+        # the new rows. _persist_to_db is idempotent on (upload_id, source_doc).
+        try:
+            await _persist_to_db(upload_id, existing_rows, files_total)
+        except Exception as e:
+            logger.warning(f"Append: extracted_rows mirror skipped: {e}")
+
+        logger.info(
+            "Append complete for %s: %d merged, %d appended, %d total rows",
+            upload_id, merged_count, appended_count, len(existing_rows),
+        )
+    except Exception as e:
+        logger.exception(f"Append task crashed for {upload_id}: {e}")
+        await _update_upload_field(upload_id, status="error")
 
 
 @router.delete("/{upload_id}")

@@ -42,11 +42,25 @@ def _wb(keyword: str) -> str:
 
 
 # Order matters — most specific keywords first.
+#
+# Apr-2026: widened the contract pattern with `renewal`, `pricing[_-]?schedule`,
+# `service[_-]?order`, plain `quote`, and standalone `signed`. This covers
+# real-world filenames like:
+#   - "Beehive Insurance Agency.xlsx - Renewal (2) - signed.pdf"
+#   - "Comcast Pricing Schedule - 042026.pdf"
+#   - "ATT Service Order 8495.pdf"
+# These were previously missed by the strict `contract|agreement|msa|sow`
+# vocabulary and silently defaulted to invoice downstream.
 _DOC_TYPE_FILENAME_HINTS: list[tuple[str, str]] = [
     # csr — common variants
     (rf"{_wb('csr')}|customer[\s_.-]?service[\s_.-]?record|service[\s_.-]?record", "csr"),
-    # contract / agreement / quote / order
-    (rf"{_wb('contract')}|agreement|amendment|signed[\s_.-]?quote|order[\s_.-]?form|{_wb('msa')}|{_wb('sow')}|addendum", "contract"),
+    # contract / agreement / quote / order — widened in Apr-2026 (see comment above)
+    (
+        rf"{_wb('contract')}|agreement|amendment|signed[\s_.-]?quote|order[\s_.-]?form"
+        rf"|{_wb('msa')}|{_wb('sow')}|addendum|renewal|pricing[\s_.-]?schedule"
+        rf"|service[\s_.-]?order|{_wb('quote')}|{_wb('signed')}",
+        "contract",
+    ),
     # report variants
     (rf"{_wb('report')}|usage|itemized|spend[\s_.-]?summary|trending", "report"),
     # phone-number lists
@@ -57,6 +71,68 @@ _DOC_TYPE_FILENAME_HINTS: list[tuple[str, str]] = [
     # broadest signal and we want the more specific ones to win first.
     (rf"{_wb('invoice')}|{_wb('invc')}|{_wb('bill')}|billing[\s_.-]?statement|statement", "invoice"),
 ]
+
+
+# Universal (carrier-agnostic) content markers used by `_infer_doc_type_from_text`.
+#
+# Why this exists: per-carrier `first_page_signals.doc_type_markers` only fire
+# when the document matches a tuned carrier. For untuned carriers (or when the
+# carrier-specific markers don't list a particular doc_type), the classifier
+# left `document_type` blank and downstream defaulted to "invoice". This list
+# captures the universal grammar of telecom contracts/CSRs/invoices/reports so
+# we get a doc_type even without carrier tuning.
+#
+# Order matters — most specific (highest signal) first. Stop at first type
+# whose markers match a `_MIN_MARKER_HITS` threshold.
+_DOC_TYPE_TEXT_MARKERS: list[tuple[str, list[str]]] = [
+    ("contract", [
+        "master service agreement", "service agreement", "this agreement",
+        "effective date:", "term:", "renewal term", "auto-renew",
+        "auto renew", "pricing schedule", "agreement number",
+        "rate schedule", "agreed pricing", "renewal effective",
+        "in witness whereof", "by signing below", "service order",
+        "executed by", "signed and accepted",
+    ]),
+    ("csr", [
+        "customer service record", "main billing telephone number",
+        "btn:", "working telephone number", "service address",
+        "billing telephone number", "service order number",
+    ]),
+    ("invoice", [
+        "amount due", "total amount due", "invoice number", "invoice date",
+        "billing period", "current charges", "previous balance",
+        "remit to", "payment due date", "amount enclosed",
+    ]),
+    ("report", [
+        "usage summary", "trending report", "spend summary",
+        "itemized usage", "calls itemized", "usage details",
+    ]),
+]
+
+# How many distinct markers a doc must hit before we trust the universal
+# detector. 2 keeps false-positives low (single common phrases like "amount
+# due" can appear in any doc, but "amount due" + "invoice number" is decisive).
+_MIN_MARKER_HITS = 2
+
+
+def _infer_doc_type_from_text(text: str) -> str | None:
+    """Carrier-agnostic doc_type detection from first-page text.
+
+    Returns one of invoice/csr/contract/report when at least
+    `_MIN_MARKER_HITS` markers from a single doc-type bucket appear, else None.
+    Used as a fallback when carrier-specific `doc_type_markers` don't fire —
+    which happens for untuned carriers or contract files whose carrier YAML
+    only defined invoice/CSR markers (~63 of 67 carriers in registry).
+    """
+    if not text:
+        return None
+    text_lower = text.lower()
+    best: tuple[str, int] | None = None  # (doc_type, hits)
+    for doc_type, markers in _DOC_TYPE_TEXT_MARKERS:
+        hits = sum(1 for m in markers if m in text_lower)
+        if hits >= _MIN_MARKER_HITS and (best is None or hits > best[1]):
+            best = (doc_type, hits)
+    return best[0] if best else None
 
 
 def _infer_doc_type_from_filename(filename: str) -> str | None:
@@ -480,6 +556,18 @@ def classify_by_content(file_path: str) -> ClassificationResult:
             result.confidence = ConfidenceLevel.MEDIUM
             result.method = "first_page_alias"
 
+    # Universal doc_type fallback — runs whenever Stage B has not picked a
+    # doc_type yet. Catches contract files whose carrier YAML doesn't list
+    # contract markers (or whose carrier wasn't matched at all) so they don't
+    # silently default to "invoice" downstream.
+    if not result.document_type and text:
+        guessed_type = _infer_doc_type_from_text(text)
+        if guessed_type:
+            result.document_type = guessed_type
+            # Don't downgrade carrier confidence here — we're only enriching
+            # doc_type. Method stays as-is so observability tracking still
+            # reflects how the carrier was found.
+
     return result
 
 
@@ -708,6 +796,13 @@ async def classify_document(file_path: str, db_session=None) -> ClassificationRe
                             match = "".join(match)
                         stage_a.account_number = match
                         break
+            # Universal doc_type fallback — same idea as in classify_by_content,
+            # but here we only have stage_a's filename-derived guess (or None).
+            # Fills contracts whose filenames lack the keyword.
+            if not stage_a.document_type:
+                guessed_type = _infer_doc_type_from_text(text)
+                if guessed_type:
+                    stage_a.document_type = guessed_type
         if not stage_a.format_variant:
             stage_a.confidence = ConfidenceLevel.MEDIUM
         result = stage_a
