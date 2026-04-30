@@ -34,6 +34,9 @@ jobs:
             --command='
               set -e
 
+              echo "==> Fixing repo ownership..."
+              sudo chown -R dhanapal_s:dhanapal_s /home/dhanapal_s/Digital-Direction-New-Platform
+
               echo "==> Running deploy as dhanapal_s..."
               sudo -u dhanapal_s bash -c '"'"'
                 set -e
