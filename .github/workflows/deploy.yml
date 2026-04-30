@@ -1,0 +1,64 @@
+name: Deploy to GCP VM
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write   # required for Workload Identity Federation
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Authenticate to GCP via Workload Identity Federation
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to VM via IAP tunnel
+        run: |
+          gcloud compute ssh dhanapal_s@digital-direction-new-vm \
+            --project=digital-direction-492606 \
+            --zone=us-central1-a \
+            --tunnel-through-iap \
+            --ssh-flag="-o StrictHostKeyChecking=no" \
+            --command='
+              set -e
+              cd /home/dhanapal_s/Digital-Direction-New-Platform
+
+              echo "==> Pulling latest code..."
+              git pull origin main
+
+              echo "==> Installing Python dependencies..."
+              source backend/venv/bin/activate && pip install -e . --quiet
+
+              echo "==> Running database migrations..."
+              for f in $(ls db/migrations/*.sql | sort); do
+                echo "  Applying $f..."
+                PGPASSWORD=dd_local_dev psql -h localhost -p 5433 -U dd_user -d digital_direction -f "$f"
+              done
+
+              echo "==> Building frontend..."
+              cd frontend
+              bun install --frozen-lockfile
+              NEXT_PUBLIC_API_URL=https://dg-api.techjays.com bun run build
+              cd ..
+
+              echo "==> Restarting services..."
+              sudo systemctl restart dd-backend
+              sudo systemctl restart dd-frontend
+
+              sleep 3
+              sudo systemctl is-active dd-backend
+              sudo systemctl is-active dd-frontend
+              echo "==> Deploy complete."
+            '
