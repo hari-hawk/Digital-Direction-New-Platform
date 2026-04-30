@@ -36,6 +36,7 @@ jobs:
               cd /home/dhanapal_s/Digital-Direction-New-Platform
 
               echo "==> Pulling latest code..."
+              git config --global --add safe.directory /home/dhanapal_s/Digital-Direction-New-Platform
               git pull origin main
 
               echo "==> Installing Python dependencies..."
