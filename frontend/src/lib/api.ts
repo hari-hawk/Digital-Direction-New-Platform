@@ -407,6 +407,148 @@ export async function apiImportCorrections(
 }
 
 // ============================================
+// Chat + Patterns (Apr-30) — the "brain" surface
+// ============================================
+//
+// Chat is SSE-streamed from POST /api/chat/stream. The endpoint emits three
+// event types: `meta` (one-time, before first token, with row counts), `data`
+// (token chunks, default event name), and `done` (final usage). We expose
+// the stream as a callback API so callers can update React state incrementally
+// without juggling raw EventSource semantics.
+
+export type ChatRole = "user" | "assistant";
+export interface ChatMessage {
+  role: ChatRole;
+  content: string;
+}
+
+export interface ChatMeta {
+  row_count?: number;
+  sampled?: number;
+  project_count?: number;
+  findings?: { total: number; by_kind: Record<string, number>; by_severity: Record<string, number> };
+}
+
+export interface ChatStreamCallbacks {
+  onMeta?: (meta: ChatMeta) => void;
+  onToken?: (text: string) => void;
+  onDone?: (usage: { input_tokens: number; output_tokens: number }) => void;
+  onError?: (err: string) => void;
+}
+
+/**
+ * Stream a chat reply. Either project-scoped (pass projectId) or platform-wide.
+ * Returns a Promise that resolves when the stream finishes (success or error).
+ * The callbacks fire incrementally as events arrive — wire onToken to append
+ * to the live message bubble, onDone for telemetry.
+ */
+export async function apiChatStream(
+  args: {
+    messages: ChatMessage[];
+    mode: "project" | "platform";
+    projectId?: string;
+    clientFilter?: string;
+  },
+  cb: ChatStreamCallbacks = {},
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      messages: args.messages,
+      mode: args.mode,
+      project_id: args.projectId,
+      client_filter: args.clientFilter,
+    }),
+  });
+  if (!res.ok || !res.body) {
+    const text = await res.text();
+    cb.onError?.(`HTTP ${res.status}: ${text}`);
+    return;
+  }
+
+  // Parse SSE manually — `EventSource` doesn't support POST and doesn't expose
+  // headers, so we own the line-buffering ourselves. Each event is separated
+  // by \n\n; lines within an event are key:value pairs.
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const rawEvent = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        if (!rawEvent.trim()) continue;
+
+        let eventName = "message"; // SSE default when no `event:` line
+        const dataLines: string[] = [];
+        for (const line of rawEvent.split("\n")) {
+          if (line.startsWith("event:")) eventName = line.slice(6).trim();
+          else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+        }
+        const data = dataLines.join("\n");
+        if (!data) continue;
+
+        try {
+          const parsed = JSON.parse(data);
+          if (eventName === "meta") cb.onMeta?.(parsed);
+          else if (eventName === "done") cb.onDone?.(parsed);
+          else if (eventName === "error") cb.onError?.(parsed.error || "stream error");
+          else if (parsed.type === "token" && typeof parsed.text === "string") cb.onToken?.(parsed.text);
+        } catch {
+          // Non-JSON data — pass through as a token if we're in the default channel.
+          if (eventName === "message") cb.onToken?.(data);
+        }
+      }
+    }
+  } catch (e) {
+    cb.onError?.(e instanceof Error ? e.message : String(e));
+  }
+}
+
+// Pattern findings — same shape backend returns. Used by the Results-page
+// insights card and the dedicated /patterns dashboard.
+export interface PatternFinding {
+  kind:
+    | "recurring_vendor"
+    | "pricing_anomaly"
+    | "contract_cluster"
+    | "multi_carrier_account"
+    | "m2m_no_contract";
+  severity: "info" | "warning" | "error";
+  title: string;
+  detail: string;
+  evidence_row_ids: string[];
+  metric: Record<string, unknown>;
+}
+
+export interface PatternsResponse {
+  project_id?: string;
+  project_name?: string;
+  project_count?: number;
+  row_count: number;
+  findings: PatternFinding[];
+  summary: { total: number; by_kind: Record<string, number>; by_severity: Record<string, number> };
+  client_filter?: string | null;
+}
+
+export async function apiPatternsForProject(projectId: string): Promise<PatternsResponse> {
+  return apiFetch(`/api/chat/patterns/${projectId}`);
+}
+
+export async function apiPatternsPlatform(client?: string): Promise<PatternsResponse> {
+  const q = client ? `?client=${encodeURIComponent(client)}` : "";
+  return apiFetch(`/api/chat/patterns${q}`);
+}
+
+
+// ============================================
 // Types
 // ============================================
 

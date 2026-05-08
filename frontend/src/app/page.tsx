@@ -13,6 +13,8 @@ import { AnalyticsPage } from "@/components/pages/analytics";
 import { BinPage } from "@/components/pages/bin";
 import { ClientsPage } from "@/components/pages/clients";
 import { SettingsPage } from "@/components/pages/settings";
+import { ChatPage } from "@/components/pages/chat";
+import { PatternsPage } from "@/components/pages/patterns";
 
 function AppContent() {
   const { isAuthenticated } = useAuth();
@@ -44,6 +46,10 @@ function AppContent() {
             );
           case "review":
             return <ReviewPage onBack={() => navigate("results")} />;
+          case "chat":
+            return <ChatPage />;
+          case "patterns":
+            return <PatternsPage />;
           case "analytics":
             return <AnalyticsPage />;
           case "clients":

@@ -16,6 +16,7 @@ import * as XLSX from "xlsx";
 import { useAppStore, type ExtractedRow } from "@/lib/store";
 import { apiExportExcel, apiImportCorrections, apiMerge, apiGetStatus, apiGetResults, apiGetResultsWithView, apiListVersions, type InventoryVersion } from "@/lib/api";
 import { mapAPIRowToStore } from "@/components/pages/upload";
+import { ChatDrawer } from "@/components/chat/ChatDrawer";
 
 const confStyle = {
   high: { icon: CheckCircle2, color: "text-emerald-400", bg: "bg-emerald-500/10" },
@@ -433,6 +434,9 @@ export function ResultsPage({ onReviewRow, onBack }: ResultsPageProps) {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* Project-scoped chat drawer — sits next to the merge button so
+                the analyst can ask questions about whatever they're looking at. */}
+            <ChatDrawer projectId={upload.id} projectName={upload.projectName} />
             {carriers.length > 0 && (
               <Button
                 size="sm"

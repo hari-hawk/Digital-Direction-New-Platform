@@ -17,6 +17,7 @@ import {
   Trash2,
   Users,
   Wallet,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
@@ -26,14 +27,21 @@ import { apiGetSpend, type SpendStatus } from "@/lib/api";
 
 import { Table2 } from "lucide-react";
 
-export type Page = "dashboard" | "upload" | "results" | "review" | "analytics" | "clients" | "bin" | "settings";
+export type Page = "dashboard" | "upload" | "results" | "review" | "chat" | "patterns" | "analytics" | "clients" | "bin" | "settings";
 
 const navItems: { id: Page; label: string; icon: React.ElementType }[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "upload", label: "Upload", icon: Upload },
   // Results doubles as the review/inspection surface — users click a row to review it in context.
   { id: "results", label: "Results", icon: Table2 },
-  { id: "analytics", label: "Analytics", icon: BarChart3 },
+  // Chat = the conversational "brain" surface. Cross-project Q&A grounded in
+  // pattern detectors + extraction context. Project-scoped chat lives as a
+  // sidebar drawer on Results.
+  { id: "chat", label: "Chat", icon: Sparkles },
+  // Patterns = deterministic insights dashboard (recurring vendors, pricing
+  // anomalies, contract clusters, etc). Same detectors that power chat.
+  { id: "patterns", label: "Insights", icon: BarChart3 },
+  { id: "analytics", label: "Analytics", icon: FileSearch },
   { id: "clients", label: "Clients", icon: Users },
   { id: "bin", label: "Bin", icon: Trash2 },
   { id: "settings", label: "Settings", icon: Settings },
