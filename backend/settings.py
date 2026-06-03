@@ -53,6 +53,14 @@ class Settings(BaseSettings):
     section_timeout: int = 600           # max total seconds per section (safety net — streaming handles most cases)
     extraction_batch_size: int = 50      # sections per batch
 
+    # Domain routing (Level B, commit 2). When True, /api/uploads/classify
+    # runs detect_domain() on the first-page text and stores the picked
+    # pack key on every classified file. Pattern detection then routes via
+    # pattern_detectors_for(pack_key). When False (default), behavior is
+    # identical to pre-Level B: telecom is implicitly used for everything.
+    # Set DD_DOMAIN_ROUTING=true to flip on per environment.
+    domain_routing_enabled: bool = False
+
     # LangFuse — LLM observability (self-hosted)
     langfuse_enabled: bool = True  # Set to True + provide keys to enable tracing
     langfuse_public_key: str = "pk-lf-test-key"  # Override via LANGFUSE_PUBLIC_KEY env var

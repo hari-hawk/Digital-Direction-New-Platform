@@ -365,6 +365,11 @@ class ClassifiedFile(BaseModel):
     # extracted internally during classify_by_filename / classify_by_content;
     # we just weren't returning it. None when no account is detectable.
     account_number: Optional[str] = None
+    # Level B (Jun-2026) — domain pack key picked by detect_domain() against
+    # the first-page text. Only set when settings.domain_routing_enabled
+    # is True; None otherwise (pipeline behaves identically to pre-Level B).
+    # Values today: "telecom" | "insurance" | "generic_billing" | None.
+    domain_pack: Optional[str] = None
 
 
 class MatchCandidate(BaseModel):
@@ -544,6 +549,7 @@ async def classify_upload(
         # open_local is zero-copy for LocalStorage and downloads-to-tempfile
         # for GCS. We hold the context across all reads so a GCS file is
         # downloaded once per classify, not once per stage.
+        first_page_text: str | None = None  # cached so Stage C + domain detect share one read
         with storage.open_local(sp) as local_path:
             local_str = str(local_path)
             stage_a = classify_by_filename(safe_name)
@@ -560,14 +566,35 @@ async def classify_upload(
             # The LLM is open-ended — it returns the actual carrier printed on the doc.
             if not carrier_key:
                 try:
-                    text = await asyncio.to_thread(extract_first_pages_text, local_str)
-                    if text:
-                        stage_c = await classify_by_llm(local_str, text)
+                    first_page_text = await asyncio.to_thread(extract_first_pages_text, local_str)
+                    if first_page_text:
+                        stage_c = await classify_by_llm(local_str, first_page_text)
                         carrier_key = stage_c.carrier or carrier_key
                         doc_type = doc_type or stage_c.document_type
                         account_number = account_number or stage_c.account_number
                 except Exception as e:
                     logger.warning(f"LLM classify failed for {safe_name}: {e}")
+
+            # Domain pack detection (Level B, commit 2). Flag-gated so the
+            # default behavior is unchanged. Reads first-page text once and
+            # picks the highest-scoring pack from the registry. Free — pure
+            # substring matching against ~50 signals.
+            domain_pack_key: str | None = None
+            if settings.domain_routing_enabled:
+                try:
+                    if first_page_text is None:
+                        first_page_text = await asyncio.to_thread(extract_first_pages_text, local_str)
+                    if first_page_text:
+                        from backend.services.domain_packs import detect_domain
+                        winner = detect_domain(first_page_text)
+                        if winner is not None:
+                            domain_pack_key = winner[0].key
+                            logger.info(
+                                "domain_pack picked %s (%d signal hits) for %s",
+                                domain_pack_key, winner[1], safe_name,
+                            )
+                except Exception as e:
+                    logger.warning(f"Domain detection skipped for {safe_name}: {e}")
 
         # Configured carriers use their canonical display name ("AT&T"),
         # detected/unknown ones show title-cased slug ("frontier" -> "Frontier").
@@ -586,6 +613,7 @@ async def classify_upload(
             format_variant=format_variant,
             file_size=fsize,
             account_number=account_number,
+            domain_pack=domain_pack_key,
         )
 
     classified = await asyncio.gather(*[

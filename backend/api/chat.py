@@ -120,6 +120,27 @@ def _slim_row(row: dict) -> dict:
     return {k: row.get(k) for k in _ROW_FIELDS_FOR_CONTEXT if row.get(k) not in (None, "", [], {})}
 
 
+def _upload_pack_key(upload: dict) -> str | None:
+    """Pick the dominant domain pack key for an upload's classified files.
+
+    Level B routing — when domain_routing_enabled was on at classify-time,
+    each file in `classified` carries a `domain_pack` field. We pick the
+    most common key across files; ties resolve to the first one seen.
+    Returns None when none of the files have a pack key (i.e., classified
+    before Level B or with the flag off) — patterns.detect_all falls back
+    to the telecom detector set, which is the legacy behavior.
+    """
+    classified = upload.get("classified") or []
+    if not classified:
+        return None
+    from collections import Counter
+    keys = [c.get("domain_pack") for c in classified if isinstance(c, dict)]
+    keys = [k for k in keys if k]
+    if not keys:
+        return None
+    return Counter(keys).most_common(1)[0][0]
+
+
 async def _build_project_context(project_id: str, max_rows: int = 80) -> tuple[str, dict]:
     """Build the system-prompt body for project-scoped chat. Returns
     `(system_prompt, meta)` where meta holds counters the API surfaces back
@@ -128,7 +149,8 @@ async def _build_project_context(project_id: str, max_rows: int = 80) -> tuple[s
     if not upload:
         return "", {"error": "Project not found"}
     rows = upload.get("results") or []
-    findings = pat.detect_all(rows, uploads=None)
+    pack_key = _upload_pack_key(upload)
+    findings = pat.detect_all(rows, uploads=None, pack_key=pack_key)
 
     # Sample rows: keep all if small enough, else stratify by source_file so
     # both the contract and the invoice rows are represented.
@@ -290,11 +312,13 @@ async def patterns_for_project(project_id: str):
     if not upload:
         return JSONResponse(status_code=404, content={"error": "Project not found"})
     rows = upload.get("results") or []
-    findings = pat.detect_all(rows, uploads=None)
+    pack_key = _upload_pack_key(upload)
+    findings = pat.detect_all(rows, uploads=None, pack_key=pack_key)
     return {
         "project_id": project_id,
         "project_name": upload.get("project_name"),
         "row_count": len(rows),
+        "domain_pack": pack_key,
         "findings": findings,
         "summary": pat.summarize(findings),
     }

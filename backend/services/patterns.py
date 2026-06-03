@@ -434,12 +434,38 @@ ALL_ROW_DETECTORS = (
 )
 
 
-def detect_all(rows: list[dict], uploads: list[dict] | None = None) -> list[dict]:
-    """Run every detector and return the combined finding list. `uploads`
-    only matters for the cross-project detectors (recurring_vendors); pass
-    `None` for project-scoped runs."""
+def detect_all(
+    rows: list[dict],
+    uploads: list[dict] | None = None,
+    pack_key: str | None = None,
+) -> list[dict]:
+    """Run every detector and return the combined finding list.
+
+    `uploads` only matters for the cross-project detectors (recurring_vendors);
+    pass None for project-scoped runs.
+
+    `pack_key` (Level B): when provided, looks up the detectors registered for
+    that domain pack via `domain_packs.pattern_detectors_for(key)`. When the
+    pack has registered detectors, those are used instead of the hardcoded
+    telecom list. When pack_key is None, or the pack has no registered
+    detectors (insurance stub, generic_billing), fall back to the telecom
+    detector set so legacy behavior is preserved.
+
+    The fallback keeps the cross-project `recurring_vendors` detector firing
+    in every mode — that one's about identifying customer-level patterns
+    (carriers reused across projects) and applies regardless of domain.
+    """
     findings: list[dict] = []
-    for fn in ALL_ROW_DETECTORS:
+    detectors = ALL_ROW_DETECTORS  # default = the 4 telecom detectors
+    if pack_key:
+        try:
+            from backend.services.domain_packs import pattern_detectors_for
+            packed = pattern_detectors_for(pack_key)
+            if packed:
+                detectors = tuple(packed)
+        except Exception as e:
+            logger.warning(f"pattern_detectors_for({pack_key!r}) skipped: {e}")
+    for fn in detectors:
         try:
             findings.extend(fn(rows))
         except Exception as e:
