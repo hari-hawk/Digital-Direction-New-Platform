@@ -332,6 +332,12 @@ async def get_relevant_corrections_db(
     rows = result.fetchall()
 
     if rows:
+        # Telemetry log line — greppable from prod logs to measure how often
+        # exact-match recall is satisfying the request without needing vectors.
+        logger.info(
+            "feedback.recall tier=exact carrier=%s hits=%d",
+            carrier, len(rows),
+        )
         return [
             CorrectionHint(
                 field_name=r[0],
@@ -382,11 +388,16 @@ async def get_relevant_corrections_db(
                     carrier=carrier,
                     occurrence_count=len(group),
                 ))
+            logger.info(
+                "feedback.recall tier=vector carrier=%s candidates=%d hits=%d",
+                carrier, len(sim_rows), min(len(hints), 20),
+            )
             return hints[:20]
 
         except Exception as e:
             logger.warning(f"pgvector similarity search failed: {e}")
 
+    logger.info("feedback.recall tier=miss carrier=%s", carrier)
     return []
 
 
