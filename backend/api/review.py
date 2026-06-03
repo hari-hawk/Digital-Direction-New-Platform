@@ -4,7 +4,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, BackgroundTasks
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select, text, update, func
@@ -180,9 +180,17 @@ async def get_row_sources(row_id: str, db: AsyncSession = Depends(get_db)):
 async def submit_correction(
     row_id: str,
     correction: CorrectionRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    """Submit a human correction for a field."""
+    """Submit a human correction for a field.
+
+    May-2026: after the correction is committed, schedules a background task
+    to embed the correction (option C synthesis) into the `corrections.embedding`
+    pgvector column. The next extraction over similar source text will then
+    retrieve this correction via `get_relevant_corrections_db`'s Tier-2
+    vector-similarity branch. Self-learning loop, $0 marginal cost per save.
+    """
     try:
         row_uuid = uuid.UUID(row_id)
     except ValueError:
@@ -252,6 +260,41 @@ async def submit_correction(
 
     await db.commit()
     await db.refresh(corr)
+
+    # ── Schedule self-learning embedding write (commit 1 of Level A) ──
+    # Fire-and-forget: the analyst's save returns immediately while the
+    # embedding lands in the background. If it fails (LLM down, etc.) the
+    # correction row still exists with embedding=NULL; the periodic backfill
+    # job sweeps those up. Tier-1 exact-match recall keeps working regardless.
+    try:
+        # Best-effort doc_type lookup so the synthesis sentence carries it.
+        # We already have the document object loaded above if primary_document_id
+        # was set; re-derive doc_type from it.
+        doc_type_for_embedding: str | None = None
+        if row.primary_document_id:
+            try:
+                from backend.models.orm import Document
+                doc_for_type = (await db.execute(
+                    select(Document).where(Document.id == row.primary_document_id)
+                )).scalar_one_or_none()
+                if doc_for_type:
+                    doc_type_for_embedding = getattr(doc_for_type, "document_type", None)
+            except Exception:
+                pass
+        from backend.services.learning import schedule_embedding
+        schedule_embedding(
+            background_tasks,
+            correction_id=corr.id,
+            carrier=row.carrier,
+            doc_type=doc_type_for_embedding,
+            field_name=correction.field_name,
+            extracted_value=correction.extracted_value,
+            corrected_value=correction.corrected_value,
+            source_text_snippet=source_text_snippet,
+            format_variant=format_variant,
+        )
+    except Exception as e:
+        logger.warning(f"submit_correction: embedding schedule skipped: {e}")
 
     # Sync the correction back to uploads.results JSONB so the Results page
     # reflects the edit immediately. Without this, inline edits live in the

@@ -1210,6 +1210,44 @@ async def retry_extraction(upload_id: str, background_tasks: BackgroundTasks):
 # ============================================
 
 
+# ── Correction-hint loader using the pgvector-aware feedback service ─────────
+#
+# Wraps `get_relevant_corrections_db` with a short-lived DB session. We call
+# this once per file inside `_run_extraction` so the LLM extractor receives
+# hints that match the *actual text* of this document, not just hints filed
+# under the same carrier.
+#
+# Tier-1 (exact match on carrier+field) fires for free; Tier-2 (pgvector
+# cosine similarity against the corrections.embedding column we now populate
+# in review.py + exports.py) fires when no exact hits exist. The combined
+# behaviour: stable corrections become persistent rules, while one-off
+# corrections become context-conditioned suggestions.
+#
+# Non-raising by design — if the DB / embedder is down, returns [] so
+# extraction proceeds without learned hints.
+async def _load_correction_hints_for_doc(
+    carrier: str | None,
+    format_variant: str | None,
+    context_text: str | None,
+) -> list:
+    """Return correction hints applicable to this document. Best-effort."""
+    if not carrier:
+        return []
+    try:
+        from backend.services.feedback import get_relevant_corrections_db
+        async with async_session() as sess:
+            hints = await get_relevant_corrections_db(
+                sess,
+                carrier=carrier,
+                format_variant=format_variant,
+                context_text=context_text,
+            )
+            return list(hints or [])
+    except Exception as e:
+        logger.debug(f"_load_correction_hints_for_doc skipped ({carrier}): {e}")
+        return []
+
+
 # Keys used by the append-merge to identify whether a new row already
 # exists in the upload's inventory. Tried in order; first hit wins. Mirrors
 # the merger's correlation strategy (account → sub_account → phone → circuit)
@@ -1403,22 +1441,8 @@ async def _run_append_extraction(upload_id: str, new_assignments: list[dict]):
         existing_rows = list(upload.get("results") or [])
         saved_files = upload.get("files") or {}
 
-        # Load correction hints (same loop as _run_extraction). Keeps
-        # iterative updates benefiting from analyst edits made on prior runs.
-        correction_hints_by_carrier: dict[str, list] = {}
-        try:
-            from backend.services.feedback import get_relevant_corrections
-            for a in new_assignments:
-                cd = a.get("carrier")
-                if not cd:
-                    continue
-                ckey = _carrier_display_to_key(cd) or cd
-                hints = get_relevant_corrections(ckey) or get_relevant_corrections(cd)
-                if hints:
-                    correction_hints_by_carrier[ckey] = hints
-                    correction_hints_by_carrier[cd] = hints
-        except Exception as e:
-            logger.debug(f"Append: correction hint loading skipped: {e}")
+        # Append flow uses the same pgvector-aware per-file hint loader as the
+        # main _run_extraction below — see _load_correction_hints_for_doc.
 
         new_rows: list[dict] = []
         files_processed_now = 0
@@ -1443,10 +1467,21 @@ async def _run_append_extraction(upload_id: str, new_assignments: list[dict]):
                     })
                     continue
                 file_errors: list[str] = []
-                hints = (
-                    correction_hints_by_carrier.get(carrier_key)
-                    or correction_hints_by_carrier.get(carrier_display)
+                first_section_text = ""
+                try:
+                    first_section_text = (parsed.sections[0].text or "")[:500] if parsed.sections else ""
+                except Exception:
+                    pass
+                hints = await _load_correction_hints_for_doc(
+                    carrier=carrier_key or carrier_display,
+                    format_variant=assignment.get("format_variant"),
+                    context_text=first_section_text or None,
                 )
+                if hints:
+                    logger.info(
+                        "Append: loaded %d correction hint(s) for %s (vector-aware)",
+                        len(hints), filename,
+                    )
                 rows, _resp = await extract_document(
                     parsed, errors_out=file_errors, correction_hints=hints,
                 )
@@ -1922,32 +1957,13 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
         # results stop being silent (e.g. PDF too big for the model).
         extraction_errors: list[dict] = []
 
-        # ── Load correction hints for self-healing feedback ──
-        # The CLI path (orchestrator.py) loads these and passes them to the
-        # extractor so past analyst corrections inject into the prompt and the
-        # LLM avoids repeating the same mistake. The API path (this function,
-        # which the website uses) didn't pre-Apr-29 — meaning UI corrections
-        # never fed back into the next extraction. Closing that loop here so
-        # the platform actually learns from the analyst's edits.
-        correction_hints_by_carrier: dict[str, list] = {}
-        try:
-            from backend.services.feedback import get_relevant_corrections
-            carriers_in_batch = {a.get("carrier") for a in file_assignments if a.get("carrier")}
-            for carrier_display in carriers_in_batch:
-                # Try the canonical carrier key first (matches how corrections
-                # are stored), fall back to the display name.
-                ckey = _carrier_display_to_key(carrier_display) or carrier_display
-                hints = get_relevant_corrections(ckey)
-                if not hints and ckey != carrier_display:
-                    hints = get_relevant_corrections(carrier_display)
-                if hints:
-                    # Store under both keys so the per-file lookup below works
-                    # regardless of which form the assignment carries.
-                    correction_hints_by_carrier[ckey] = hints
-                    correction_hints_by_carrier[carrier_display] = hints
-                    logger.info("Loaded %d correction hint(s) for %s", len(hints), carrier_display)
-        except Exception as e:
-            logger.debug("Correction hint loading skipped: %s", e)
+        # ── Self-learning correction hints (Level A: vector-aware loading) ──
+        # May-2026: switched from carrier-level preload (legacy keyword match)
+        # to per-file pgvector-aware loading inside the loop below. That lets
+        # Tier-2 vector similarity fire against the actual document text the
+        # LLM is about to process, so contextual analyst corrections surface.
+        # The carrier-level Tier-1 exact-match still fires inside the same
+        # helper for free.
 
         for assignment in file_assignments:
             # Check if cancel was requested
@@ -1986,14 +2002,26 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
 
                 # Extract — collect per-section errors so silent failures
                 # (oversized prompt, JSON parse error, timeout) are surfaced.
-                # Also pass past correction hints for this carrier so analyst
-                # edits from prior uploads steer the LLM away from the same
-                # mistake (the "system learns from us" loop).
+                # Pull correction hints from the pgvector-aware loader using
+                # this file's first section as retrieval context, so past
+                # analyst corrections on similar documents steer the LLM away
+                # from the same mistake (the "system learns from us" loop).
                 file_errors: list[str] = []
-                hints = (
-                    correction_hints_by_carrier.get(carrier_key)
-                    or correction_hints_by_carrier.get(carrier_display)
+                first_section_text = ""
+                try:
+                    first_section_text = (parsed.sections[0].text or "")[:500] if parsed.sections else ""
+                except Exception:
+                    pass
+                hints = await _load_correction_hints_for_doc(
+                    carrier=carrier_key or carrier_display,
+                    format_variant=assignment.get("format_variant"),
+                    context_text=first_section_text or None,
                 )
+                if hints:
+                    logger.info(
+                        "Loaded %d correction hint(s) for %s (vector-aware)",
+                        len(hints), filename,
+                    )
                 rows, responses = await extract_document(
                     parsed,
                     errors_out=file_errors,

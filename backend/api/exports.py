@@ -17,7 +17,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import yaml
-from fastapi import APIRouter, Depends, UploadFile, File
+from fastapi import APIRouter, Depends, UploadFile, File, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -539,6 +539,7 @@ def _build_mandatory_fields_sheet(ws, column_specs, req_labels):
 @router.post("/corrections/import")
 async def import_corrections(
     upload_id: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
@@ -637,6 +638,9 @@ async def import_corrections(
         # Diff each Excel row against the matching DB row
         corrections_created = 0
         rows_compared = 0
+        # Batch-buffer of corrections to embed after the transaction commits.
+        # Each entry: (Correction ORM obj, carrier, field_name, before, after).
+        corrections_to_embed: list[tuple] = []
         for idx, excel_row in enumerate(ws.iter_rows(min_row=data_start_row, values_only=True)):
             if idx >= len(db_rows):
                 break
@@ -666,7 +670,7 @@ async def import_corrections(
                     # Couldn't coerce — log but don't crash the import; record the
                     # correction with the raw text so the analyst's intent is captured.
                     coerced = excel_str
-                db.add(Correction(
+                new_corr = Correction(
                     extracted_row_id=db_row.id,
                     extraction_run_id=db_row.extraction_run_id,
                     field_name=field_name,
@@ -674,7 +678,12 @@ async def import_corrections(
                     corrected_value=excel_str,
                     correction_type="excel_import",
                     carrier=db_row.carrier,
-                ))
+                )
+                db.add(new_corr)
+                # Track for batch-embedding after commit (Level A self-learning).
+                corrections_to_embed.append(
+                    (new_corr, db_row.carrier, field_name, db_str, excel_str)
+                )
                 try:
                     setattr(db_row, field_name, coerced)
                 except (TypeError, ValueError) as e:
@@ -690,6 +699,38 @@ async def import_corrections(
                 db_row.review_status = "corrected"
 
         await db.commit()
+
+        # ── Schedule self-learning embeddings for every correction we just
+        # created (Level A: vector memory of analyst corrections). One Gemini
+        # embed call per correction; total cost ~$0.0001 each. Runs in the
+        # background so the import HTTP response isn't blocked. Best-effort:
+        # any single failure is logged but doesn't abort the others.
+        if corrections_to_embed:
+            try:
+                from backend.services.learning import schedule_embedding
+                for new_corr, carrier, field_name, before, after in corrections_to_embed:
+                    schedule_embedding(
+                        background_tasks,
+                        correction_id=new_corr.id,
+                        carrier=carrier,
+                        # Excel import path doesn't carry document context per
+                        # cell — doc_type and source_text_snippet are None. The
+                        # synthesis sentence still gets carrier + field + before
+                        # + after, which is enough to retrieve "I corrected this
+                        # field on this carrier before" without raw-text recall.
+                        doc_type=None,
+                        field_name=field_name,
+                        extracted_value=before,
+                        corrected_value=after,
+                        source_text_snippet=None,
+                        format_variant=None,
+                    )
+                logger.info(
+                    "import_corrections: scheduled %d embedding(s) for self-learning recall",
+                    len(corrections_to_embed),
+                )
+            except Exception as e:
+                logger.warning(f"import_corrections: embedding schedule skipped: {e}")
 
         # Sync the corrections back into uploads.results JSONB so the frontend
         # sees the analyst's edits immediately.
