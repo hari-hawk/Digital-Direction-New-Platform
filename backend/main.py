@@ -39,6 +39,7 @@ from backend.api.analytics import router as analytics_router
 from backend.api.clients import router as clients_router
 from backend.api.chat import router as chat_router
 from backend.api.feedback_stats import router as feedback_stats_router
+from backend.api.domains import router as domains_router
 
 app.include_router(uploads_router)
 app.include_router(review_router)
@@ -49,6 +50,7 @@ app.include_router(analytics_router)
 app.include_router(clients_router)
 app.include_router(chat_router)
 app.include_router(feedback_stats_router)
+app.include_router(domains_router)
 
 
 @app.get("/health")

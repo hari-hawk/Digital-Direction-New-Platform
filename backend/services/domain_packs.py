@@ -94,6 +94,27 @@ GENERIC_BILLING_FIELDS = (
     "confidence", "field_confidence",
 )
 
+# Insurance — proves the horizontal seam. NOT a production-ready schema; just
+# the dozen fields every insurance document has so we can route a real
+# insurance PDF through the new path and watch it land somewhere sane. Real
+# insurance extraction needs ~30+ fields (named perils, exclusions, rider
+# IDs, etc.); that's Level B+ work once a customer asks for it.
+INSURANCE_FIELDS = (
+    "row_type", "status", "notes",
+    "carrier_name",                # the insurance company
+    "policy_holder", "policy_number", "policy_type",
+    "effective_date", "expiration_date",
+    "premium_amount", "premium_frequency",   # monthly/annual/single
+    "coverage_amount", "deductible",
+    "coverage_type",               # auto/home/life/health/commercial/...
+    "insured_property",            # vehicle VIN, address, person name
+    "agent_name", "agent_phone",
+    "billing_address_1", "city", "state", "zip", "country",
+    "currency", "renewal_terms", "auto_renew",
+    "validation_issues", "validation_valid",
+    "confidence", "field_confidence",
+)
+
 
 # ── Pack definition ─────────────────────────────────────────────────────────
 
@@ -167,6 +188,33 @@ _GENERIC_BILLING_SIGNALS = (
     "payment terms",
 )
 
+# Insurance signals — phrases that strongly indicate an insurance document.
+# Picked from declarations pages, policy schedules, certificates of insurance,
+# and renewal notices across auto/home/life/commercial lines. Telecom never
+# uses any of these phrases (verified against the existing 67 carrier docs),
+# so the tiebreak with the telecom pack stays clean.
+_INSURANCE_SIGNALS = (
+    "policy number",
+    "policy holder",
+    "policyholder",
+    "named insured",
+    "effective date",
+    "expiration date",
+    "premium",
+    "deductible",
+    "coverage limit",
+    "declarations",
+    "endorsement",
+    "underwriter",
+    "rider",
+    "beneficiary",
+    "claim number",
+    "insurer",
+    "certificate of insurance",
+    "perils",
+    "exclusions",
+)
+
 
 _REGISTRY: list[DomainPack] = [
     DomainPack(
@@ -176,6 +224,19 @@ _REGISTRY: list[DomainPack] = [
         prompt_namespace="processing",  # existing prompts already live here
         content_signals=_TELECOM_SIGNALS,
         default_doc_types=("invoice", "csr", "contract", "report", "subscription", "did_list"),
+    ),
+    DomainPack(
+        key="insurance",
+        display="Insurance (Policies, Declarations, Claims)",
+        field_set=INSURANCE_FIELDS,
+        # Prompts intentionally don't exist yet — when an insurance document
+        # actually arrives, the classifier will route to this pack and
+        # extraction will fall through to a generic per-doc-type prompt at
+        # configs/processing_insurance/{doc_type}_extraction.md. The
+        # placeholder namespace is reserved here so the seam is wired.
+        prompt_namespace="processing_insurance",
+        content_signals=_INSURANCE_SIGNALS,
+        default_doc_types=("policy", "declaration", "endorsement", "claim", "renewal"),
     ),
     DomainPack(
         key="generic_billing",
@@ -229,3 +290,86 @@ def field_set_for(key: str) -> tuple[str, ...] | None:
     the columns relevant for the current domain."""
     pack = get_pack(key)
     return pack.field_set if pack else None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Behavior maps — per-pack pattern detectors + canonicalizers.
+#
+# Kept as plain dict lookups keyed by `DomainPack.key` so the DomainPack
+# dataclass itself stays frozen + metadata-only. Adding a new pack means:
+#   1. Append a DomainPack(...) to _REGISTRY above
+#   2. Optionally register pattern detectors / canonicalizers below
+# If a pack has no entry here, the helpers return [] / passthrough — both
+# fine, and consistent with the current pipeline's "no-op when nothing's
+# configured" behavior.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _telecom_detectors() -> list:
+    """Lazy import so this module stays importable in contexts without the
+    full pipeline available (CLI scripts, smoke tests, etc.)."""
+    from backend.services.patterns import (
+        pricing_anomalies,
+        contract_expirations,
+        multi_carrier_same_account,
+        m2m_needing_contracts,
+    )
+    return [
+        pricing_anomalies,
+        contract_expirations,
+        multi_carrier_same_account,
+        m2m_needing_contracts,
+    ]
+
+
+def _telecom_canonicalize(row: dict) -> dict:
+    """Telecom canonicalization — maps 'Verizon Wireless' to 'Verizon',
+    etc. Mutates and returns the same dict for ergonomic chaining."""
+    try:
+        from backend.services.carrier_match import match_carrier_name
+        raw = row.get("carrier_name") or row.get("carrier")
+        if raw:
+            match = match_carrier_name(raw)
+            if match and match.canonical_name:
+                row["carrier_name"] = match.canonical_name
+    except Exception:
+        pass  # Best-effort — never break a row over canonicalization
+    return row
+
+
+# Insurance + generic_billing have no detectors / canonicalizers yet — the
+# stubs return [] / passthrough automatically when they're not in the map.
+_PATTERN_DETECTOR_BUILDERS: dict[str, callable] = {
+    "telecom": _telecom_detectors,
+}
+
+_CANONICALIZERS: dict[str, callable] = {
+    "telecom": _telecom_canonicalize,
+}
+
+
+def pattern_detectors_for(key: str) -> list:
+    """Return the list of pattern-detector callables for a domain pack.
+    Each detector takes a `list[dict]` of extracted rows and returns a
+    `list[Finding]`. Empty list when the pack has no detectors yet."""
+    builder = _PATTERN_DETECTOR_BUILDERS.get(key)
+    if not builder:
+        return []
+    try:
+        return builder()
+    except Exception as e:
+        logger.warning(f"pattern_detectors_for({key!r}) failed: {e}")
+        return []
+
+
+def canonicalize_row(key: str, row: dict) -> dict:
+    """Apply the pack's canonicalization to a row. Passthrough for packs
+    without a registered canonicalizer."""
+    fn = _CANONICALIZERS.get(key)
+    if fn is None:
+        return row
+    try:
+        return fn(row)
+    except Exception as e:
+        logger.warning(f"canonicalize_row({key!r}) failed: {e}")
+        return row
