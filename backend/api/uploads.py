@@ -2050,6 +2050,51 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
                         "Loaded %d correction hint(s) for %s (vector-aware)",
                         len(hints), filename,
                     )
+                # ── Level B routing branch ──
+                # When the file was classified with a non-telecom domain pack
+                # (DD_DOMAIN_ROUTING=true gated), route through the generic
+                # extractor instead of the telecom one. Generic rows skip
+                # telecom-specific score/validate/post-processing entirely —
+                # they land in uploads.results JSONB only, not the typed
+                # extracted_rows table. Telecom rows take the legacy path
+                # below (zero behavior change for them).
+                file_pack_key = assignment.get("domain_pack")
+                if file_pack_key and file_pack_key != "telecom":
+                    from backend.pipeline.extractor_generic import extract_document_generic
+                    generic_rows = await extract_document_generic(
+                        parsed,
+                        pack_key=file_pack_key,
+                        doc_type=assignment.get("doc_type", "policy"),
+                        errors_out=file_errors,
+                        correction_hints=hints,
+                    )
+                    if file_errors:
+                        extraction_errors.append({
+                            "filename": filename,
+                            "carrier": carrier_display,
+                            "reason": "; ".join(file_errors[:3]) + (" …" if len(file_errors) > 3 else ""),
+                        })
+                    # Minimal enrichment — same id/source/order metadata the
+                    # telecom path adds, plus a domain_pack tag so downstream
+                    # post-processors and _persist_to_db can skip these rows.
+                    for i, row_dict in enumerate(generic_rows):
+                        row_dict["id"] = f"{upload_id}-{filename}-{i}"
+                        row_dict["source_file"] = filename
+                        row_dict["extraction_order"] = len(all_rows)
+                        row_dict["domain_pack"] = file_pack_key
+                        row_dict.setdefault("confidence", "medium")
+                        row_dict.setdefault("validation_issues", [])
+                        row_dict.setdefault("validation_valid", True)
+                        all_rows.append(row_dict)
+                    files_processed += 1
+                    await _update_upload_field(upload_id, files_processed=files_processed)
+                    await _update_upload_results(upload_id, all_rows)
+                    logger.info(
+                        "  → %d generic rows from %s (pack=%s)",
+                        len(generic_rows), filename, file_pack_key,
+                    )
+                    continue  # skip telecom post-processing for this file
+
                 rows, responses = await extract_document(
                     parsed,
                     errors_out=file_errors,
@@ -2139,9 +2184,15 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
         from backend.services.carrier_match import match_carrier_name
         from backend.services.auto_carrier_registry import auto_register_from_rows
 
+        # Level B guard — only telecom rows participate in carrier registry
+        # logic. Non-telecom rows (e.g., insurance) carry company names like
+        # "Allstate" or "Progressive" in `carrier_name`; auto-registering
+        # them as telecom carriers would corrupt the YAML registry.
+        telecom_rows = [r for r in all_rows if not r.get("domain_pack") or r.get("domain_pack") == "telecom"]
+
         # Step 1: auto-register first, so the second pass picks up new carriers
         # as registered (canonicalized + no "Validate carrier" friction).
-        newly_registered = auto_register_from_rows(all_rows)
+        newly_registered = auto_register_from_rows(telecom_rows)
         if newly_registered:
             logger.info(
                 "Auto-registered %d new carrier(s): %s",
@@ -2150,9 +2201,12 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
             )
 
         # Step 2: canonicalize each row's carrier_name now that the registry
-        # includes the freshly-registered carriers.
+        # includes the freshly-registered carriers. Operates only on telecom
+        # rows — insurance rows keep their carrier_name verbatim (the pack's
+        # own canonicalizer would run via domain_packs.canonicalize_row if
+        # registered; insurance currently has none).
         canonical_names: set[str] = set()
-        for r in all_rows:
+        for r in telecom_rows:
             raw = r.get("carrier_name") or r.get("carrier")
             match = match_carrier_name(raw)
             if match is None:
@@ -2298,7 +2352,18 @@ async def _run_extraction(upload_id: str, file_assignments: list[dict]):
 
 
 async def _persist_to_db(upload_id: str, rows: list[dict], files_processed: int):
-    """Save extraction results to PostgreSQL after a successful extraction run."""
+    """Save extraction results to PostgreSQL after a successful extraction run.
+
+    Level B: skip rows tagged with a non-telecom domain_pack. The typed
+    `extracted_rows` table has telecom-shaped columns (carrier_account_number,
+    monthly_recurring_cost, USOC, etc.) — insurance / generic rows wouldn't
+    fit and would lose their domain-specific fields on coercion. Those rows
+    still land in uploads.results JSONB which preserves their full shape.
+    """
+    # Filter out non-telecom rows. We rely on the domain_pack tag the
+    # _run_extraction branch adds; rows without the tag are telecom by
+    # definition (legacy behavior preserved).
+    rows = [r for r in rows if not r.get("domain_pack") or r.get("domain_pack") == "telecom"]
     from datetime import datetime, timezone, date
 
     def _parse_date(val):
